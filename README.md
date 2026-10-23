@@ -7,6 +7,12 @@ an S3 data lake. A Python ETL pipeline cleans one region of it, together with Wo
 reference data, into PostgreSQL/PostGIS. A FastAPI service exposes the data as operational
 KPIs, and a dashboard visualises them.
 
+> **Status: MVP.** Built with free and open data on a single laptop, so it covers one region
+> (Los Angeles / Long Beach) and a few days of historical AIS data, and live data is
+> collected on demand rather than continuously. The design keeps a path to scale at each
+> point (S3-compatible lake, SQL cleaning rules, idempotent pipeline steps). See
+> [ROADMAP.md](ROADMAP.md) for the constraints and the plan, starting with real-time data.
+
 **Business questions it answers**
 
 - Which ports are busiest, and when do activity peaks occur?
@@ -326,18 +332,14 @@ Docker image build on every push to `main` and every pull request.
 
 ## Roadmap
 
-- [x] Project scaffolding, schema, ETL for ports and AIS positions
-- [x] Port call detection and `port_activity_daily` / `route_summary` aggregation
-- [x] Engineering foundations: migrations, CI, pre-commit, structured logging
-- [x] Real data: 2025 MarineCadastre batch window + live AISStream collector, data quality log
-- [x] Raw data lake: daily Parquet on S3-compatible storage, written and filtered with DuckDB
-- [x] Cleaning rules in DuckDB SQL, matching pandas on real data
-- [x] Developer tooling: Makefile, dashboard picker limited to ports with activity
-- [ ] Cleaned lake layer: whole US days cleaned once in SQL, regions loaded from it
-- [ ] `/movement-summary` endpoint with region and date filters
-- [x] Six-page dashboard: overview, busiest ports, vessel density, routes, busiest periods,
-      speed and dwell, with explanations on every page
-- [ ] Optional: orchestration with Dagster or dbt models
+Oversee is an MVP built under tight resource limits: free and open data only, one
+development laptop, one region and a few days of AIS data. [ROADMAP.md](ROADMAP.md) lists
+the constraints, what is done, and what comes next:
+
+- **Next: real-time data.** An always-on live collector, a live archive in the lake,
+  aggregates refreshed every few minutes, a live API, and a live map page in the dashboard.
+- **Later:** a cleaned lake layer, more regions and longer history, `/movement-summary`,
+  orchestration (Dagster / dbt) and a cloud deployment path.
 
 ## Data sources
 

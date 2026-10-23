@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-Oversee is a port activity analytics platform: MarineCadastre AIS vessel traffic is kept as daily Parquet in an S3 lake (SeaweedFS locally, DuckDB to read and write). A Python ETL cleans one region of it, plus the NGA World Port Index, into PostgreSQL/PostGIS. A FastAPI service exposes KPIs, and a Streamlit dashboard visualises them. MVP scope is one region (`socal`, LA/Long Beach), 1–2 weeks of AIS data. See [README.md](README.md) for the roadmap and [docs/architecture.md](docs/architecture.md) for the data model.
+Oversee is a port activity analytics platform: MarineCadastre AIS vessel traffic is kept as daily Parquet in an S3 lake (SeaweedFS locally, DuckDB to read and write). A Python ETL cleans one region of it, plus the NGA World Port Index, into PostgreSQL/PostGIS. A FastAPI service exposes KPIs, and a Streamlit dashboard visualises them. MVP scope is one region (`socal`, LA/Long Beach), 1–2 weeks of AIS data. It is an MVP under deliberate constraints (free data, one laptop, one region); [ROADMAP.md](ROADMAP.md) has the constraints and planned work, with real-time data next. See [README.md](README.md) for running it and [docs/architecture.md](docs/architecture.md) for the data model.
 
 ## Commands
 
