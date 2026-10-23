@@ -68,11 +68,11 @@ pre-commit install              # ruff + file checks on every commit
 docker compose up -d --wait db
 oversee-db upgrade
 
-# 4. Load data
-oversee-etl ports data/raw/UpdatedPub150.csv          # World Port Index export from NGA
-oversee-etl download-ais 2024-01-01 2024-01-07
-oversee-etl ais data/raw/AIS_2024_01_01.zip --region socal
-oversee-etl aggregate                                 # port calls, routes, daily summaries
+# 4. Load data: ports, 14 days of AIS for LA / Long Beach, then aggregates
+oversee-etl run --region socal --start 2025-03-03 --end 2025-03-16 --delete-raw
+
+# Optional: live positions from AISStream (free key in .env as AISSTREAM_API_KEY)
+oversee-etl stream --region socal                     # Ctrl+C to stop
 
 # 5. Run the API and dashboard
 uvicorn oversee.api.main:app --reload                 # http://localhost:8000/docs
@@ -85,6 +85,22 @@ applies migrations before the API starts.
 Common commands are also available as invoke tasks: `invoke db`, `invoke migrate`,
 `invoke test --unit`, `invoke lint`, `invoke fmt`, `invoke serve`, `invoke dashboard`,
 `invoke stack`.
+
+## Data pipeline
+
+Two feeds write to the same tables:
+
+- **Batch** (`oversee-etl run`): MarineCadastre daily files for a date window. Each file is
+  downloaded, read in 500k-row chunks, filtered to the region, cleaned and loaded with
+  `COPY`; then port calls and summaries are rebuilt. A file that was already loaded
+  (same SHA-256) is skipped, so re-running a window is safe.
+- **Live** (`oversee-etl stream`): an AISStream WebSocket collector that validates and
+  writes buffered messages every 60 s, reconnects with backoff and flushes on Ctrl+C.
+
+Individual steps are also available: `oversee-etl ports`, `download-ais`, `ais`,
+`aggregate` (`oversee-etl <step> --help`). Every run is recorded in `source_runs`, and
+rows dropped by each cleaning rule in `data_quality_log`. Sources, licences and rules are
+documented in [data/README.md](data/README.md).
 
 ## Database migrations
 
@@ -143,12 +159,14 @@ and run it again.
 - [x] Project scaffolding, schema, ETL for ports and AIS positions
 - [x] Port call detection and `port_activity_daily` / `route_summary` aggregation
 - [x] Engineering foundations: migrations, CI, pre-commit, structured logging
+- [x] Real data: 2025 MarineCadastre batch window + live AISStream collector, data quality log
 - [ ] `/movement-summary` endpoint with region and date filters
 - [ ] Dashboard: busiest ports, route summary, hourly peak heatmap
 - [ ] Optional: orchestration with Dagster or dbt models
 
 ## Data sources
 
-- [MarineCadastre AIS vessel traffic](https://hub.marinecadastre.gov/) (NOAA / BOEM)
+- [MarineCadastre AIS vessel traffic](https://hub.marinecadastre.gov/) (NOAA / BOEM), 2025 daily files
 - [World Port Index](https://msi.nga.mil/Publications/WPI) (NGA)
-- Optional enrichment: UN/LOCODE (UNECE)
+- [AISStream.io](https://aisstream.io) live AIS feed
+- Details, columns and terms: [data/README.md](data/README.md)
