@@ -1,3 +1,4 @@
+from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, inspect, text
 
 from oversee import migrate
@@ -44,13 +45,22 @@ def test_upgrade_is_idempotent(database_factory):
     assert migrate.current_revision(url) == head
 
 
-def test_schema_from_old_init_script_is_stamped_not_recreated(database_factory):
+def test_schema_from_old_init_script_is_stamped_then_upgraded(database_factory):
+    # A database built by the old init script: the baseline schema, no version table
     url = database_factory()
+    migrate.upgrade(url, migrate.BASELINE)
     engine = create_engine(url)
     with engine.begin() as conn:
-        conn.execute(text("CREATE TABLE ports (port_id INTEGER)"))
+        conn.execute(text("DROP TABLE alembic_version"))
+        conn.execute(text("INSERT INTO vessels (mmsi, vessel_type) VALUES (367000001, 70)"))
     engine.dispose()
 
     migrate.upgrade(url)
 
-    assert migrate.current_revision(url) == migrate.BASELINE
+    head = migrate.alembic_config(url)
+    assert migrate.current_revision(url) == ScriptDirectory.from_config(head).get_current_head()
+    engine = create_engine(url)
+    with engine.connect() as conn:
+        # Existing data survives and later revisions apply to it
+        assert conn.execute(text("SELECT vessel_group FROM vessels")).scalar() == "cargo"
+    engine.dispose()
