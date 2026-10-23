@@ -8,12 +8,17 @@ Examples:
 """
 
 import argparse
+import logging
 from datetime import date, timedelta
 from pathlib import Path
 
+from oversee.config import get_settings
 from oversee.db import get_engine
 from oversee.etl import aggregate, extract, load, transform
 from oversee.etl.regions import REGIONS
+from oversee.log import setup_logging
+
+logger = logging.getLogger("oversee.etl")
 
 
 def cmd_ports(args: argparse.Namespace) -> None:
@@ -22,14 +27,13 @@ def cmd_ports(args: argparse.Namespace) -> None:
         ports = transform.clean_wpi(raw)
         run["rows_read"] = len(raw)
         run["rows_loaded"] = load.load_ports(ports)
-    print(f"Loaded {run['rows_loaded']} ports")
 
 
 def cmd_download_ais(args: argparse.Namespace) -> None:
     day = args.start
     while day <= args.end:
-        print(f"Downloading {day} ...")
-        print(f"  -> {extract.download_ais_day(day)}")
+        path = extract.download_ais_day(day)
+        logger.info("AIS file ready", extra={"day": day.isoformat(), "path": str(path)})
         day += timedelta(days=1)
 
 
@@ -41,7 +45,7 @@ def cmd_ais(args: argparse.Namespace) -> None:
         vessels, positions = transform.split_vessels(positions)
         run["rows_read"] = len(raw)
         run["rows_loaded"] = load.load_ais(vessels, positions, run["run_id"])
-    print(f"Loaded {run['rows_loaded']} positions for {len(vessels)} vessels")
+        logger.info("AIS loaded", extra={"region": args.region, "vessels": len(vessels)})
 
 
 def cmd_aggregate(args: argparse.Namespace) -> None:
@@ -55,8 +59,7 @@ def cmd_aggregate(args: argparse.Namespace) -> None:
         with get_engine().begin() as conn:
             counts = aggregate.run(conn, params)
         run["rows_loaded"] = counts["port_calls"]
-    for table, n in counts.items():
-        print(f"{table}: {n} rows")
+        logger.info("derived tables rebuilt", extra=counts)
 
 
 def main() -> None:
@@ -90,6 +93,8 @@ def main() -> None:
     p.set_defaults(func=cmd_aggregate)
 
     args = parser.parse_args()
+    settings = get_settings()
+    setup_logging(settings.log_level, settings.log_format)
     args.func(args)
 
 

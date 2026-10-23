@@ -1,5 +1,7 @@
 """Load step: write cleaned frames to PostgreSQL and record pipeline runs."""
 
+import logging
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 
@@ -7,11 +9,17 @@ import pandas as pd
 from sqlalchemy import Connection, text
 
 from oversee.db import get_engine
+from oversee.log import run_id_var
+
+logger = logging.getLogger(__name__)
 
 
 @contextmanager
 def source_run(source: str, file_name: str | None = None) -> Iterator[dict]:
-    """Record a pipeline run in source_runs; callers fill in row counts on the yielded dict."""
+    """Record a pipeline run in source_runs; callers fill in row counts on the yielded dict.
+
+    While the run is active, every log record carries its run_id.
+    """
     engine = get_engine()
     with engine.begin() as conn:
         run_id = conn.execute(
@@ -19,13 +27,29 @@ def source_run(source: str, file_name: str | None = None) -> Iterator[dict]:
             {"s": source, "f": file_name},
         ).scalar_one()
 
+    token = run_id_var.set(run_id)
+    started = time.perf_counter()
+    logger.info("run started", extra={"source": source, "file_name": file_name})
     stats = {"run_id": run_id, "rows_read": None, "rows_loaded": None}
     try:
         yield stats
     except Exception as exc:
         _finish_run(run_id, "failed", stats, error=str(exc))
+        logger.exception("run failed", extra={"source": source})
         raise
-    _finish_run(run_id, "success", stats)
+    else:
+        _finish_run(run_id, "success", stats)
+        logger.info(
+            "run finished",
+            extra={
+                "source": source,
+                "rows_read": stats["rows_read"],
+                "rows_loaded": stats["rows_loaded"],
+                "duration_s": round(time.perf_counter() - started, 2),
+            },
+        )
+    finally:
+        run_id_var.reset(token)
 
 
 def _finish_run(run_id: int, status: str, stats: dict, error: str | None = None) -> None:

@@ -1,4 +1,5 @@
 from functools import lru_cache
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -11,6 +12,9 @@ class Settings(BaseSettings):
     postgres_db: str = "oversee"
     postgres_host: str = "localhost"
     postgres_port: int = 5432
+
+    log_level: str = "INFO"
+    log_format: Literal["text", "json"] = "text"
 
     @property
     def database_url(self) -> str:
