@@ -1,6 +1,7 @@
 """Developer tasks, run with `invoke <task>` (list them with `invoke --list`)."""
 
 import sys
+from pathlib import Path
 
 from invoke import task
 
@@ -62,3 +63,27 @@ def dashboard(c):
 def stack(c):
     """Build and run the full stack (db, migrate, api, dashboard) in Docker."""
     c.run("docker compose up --build")
+
+
+@task(pre=[migrate], help={"args": 'Extra dbt arguments, e.g. "--select marts"'})
+def dbt(c, args=""):
+    """Build the dbt models and run their data tests."""
+    c.run(f"{PY} oversee.dbt_runner build {args}")
+
+
+@task
+def dbt_docs(c):
+    """Generate dbt docs and serve them on http://localhost:8080."""
+    c.run(f"{PY} oversee.dbt_runner docs generate")
+    c.run(f"{PY} oversee.dbt_runner docs serve --port 8080")
+
+
+@task(pre=[migrate])
+def dagster(c):
+    """Dagster UI on http://localhost:3000 (run history in .dagster/)."""
+    home = Path(".dagster").resolve()
+    home.mkdir(exist_ok=True)
+    c.run(
+        f"{PY} dagster dev -m oversee.orchestration.definitions -p 3000",
+        env={"DAGSTER_HOME": str(home)},
+    )
