@@ -13,6 +13,9 @@ class Settings(BaseSettings):
     postgres_host: str = "localhost"
     postgres_port: int = 5432
 
+    # Free key from https://aisstream.io (sign in with GitHub, then Account)
+    aisstream_api_key: str | None = None
+
     log_level: str = "INFO"
     log_format: Literal["text", "json"] = "text"
 
