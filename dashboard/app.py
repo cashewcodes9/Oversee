@@ -40,11 +40,16 @@ st.subheader("Ports")
 st.map(ports, latitude="latitude", longitude="longitude")
 
 st.subheader("Daily activity")
-port_name = st.selectbox("Port", ports["name"])
-port_id = int(ports.loc[ports["name"] == port_name, "port_id"].iloc[0])
+# Only ports with activity: the full list is alphabetical and capped at 1000
+active = pd.DataFrame(get("/ports", active=True, limit=1000))
+if active.empty:
+    st.info("No port activity yet. Load AIS data, then run `oversee-etl aggregate`.")
+    st.stop()
+port_name = st.selectbox("Port", active["name"])
+port_id = int(active.loc[active["name"] == port_name, "port_id"].iloc[0])
 activity = pd.DataFrame(get(f"/ports/{port_id}/activity"))
 if activity.empty:
-    st.info("No activity for this port yet. Run `oversee-etl aggregate`.")
+    st.info("No activity for this port in the loaded data.")
 else:
     st.plotly_chart(
         px.bar(activity, x="activity_date", y=["arrivals", "departures"], barmode="group"),
