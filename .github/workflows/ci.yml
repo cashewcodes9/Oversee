@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install "ruff==0.17.2"
+      - run: ruff check .
+      - run: ruff format --check .
+
+  test:
+    runs-on: ubuntu-latest
+    services:
+      db:
+        image: postgis/postgis:16-3.4
+        env:
+          POSTGRES_USER: oversee
+          POSTGRES_PASSWORD: oversee
+          POSTGRES_DB: oversee
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U oversee -d oversee"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: oversee
+      POSTGRES_PASSWORD: oversee
+      POSTGRES_DB: oversee
+      # Integration tests must fail, not skip, if the database is missing
+      OVERSEE_REQUIRE_DB: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - name: Unit tests
+        run: pytest tests --ignore=tests/integration -q
+      - name: Integration tests
+        run: pytest tests/integration -q
+      - name: Migrations apply to the service database
+        run: oversee-db upgrade && oversee-db current
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t oversee:ci .
+      - name: Image contains migrations and CLIs
+        run: docker run --rm oversee:ci sh -c "oversee-db history && oversee-etl --help"
