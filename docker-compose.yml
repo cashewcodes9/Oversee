@@ -1,3 +1,12 @@
+x-app-env: &app-env
+  POSTGRES_USER: ${POSTGRES_USER:-oversee}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-oversee}
+  POSTGRES_DB: ${POSTGRES_DB:-oversee}
+  POSTGRES_HOST: db
+  POSTGRES_PORT: 5432
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  LOG_FORMAT: json
+
 services:
   db:
     image: postgis/postgis:16-3.4
@@ -9,27 +18,30 @@ services:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ./sql/schema:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-oversee} -d ${POSTGRES_DB:-oversee}"]
       interval: 5s
       timeout: 5s
       retries: 10
 
-  api:
+  # Applies pending Alembic revisions, then exits
+  migrate:
     build: .
-    command: uvicorn oversee.api.main:app --host 0.0.0.0 --port 8000
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER:-oversee}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-oversee}
-      POSTGRES_DB: ${POSTGRES_DB:-oversee}
-      POSTGRES_HOST: db
-      POSTGRES_PORT: 5432
-    ports:
-      - "8000:8000"
+    command: oversee-db upgrade
+    environment: *app-env
     depends_on:
       db:
         condition: service_healthy
+
+  api:
+    build: .
+    command: uvicorn oversee.api.main:app --host 0.0.0.0 --port 8000
+    environment: *app-env
+    ports:
+      - "8000:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
 
   dashboard:
     build: .
