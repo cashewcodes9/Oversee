@@ -1,73 +1,102 @@
 """Command-line entry point for the ETL pipeline.
 
 Examples:
-    oversee-etl ports data/raw/UpdatedPub150.csv
-    oversee-etl download-ais 2024-01-01 2024-01-14
-    oversee-etl ais data/raw/AIS_2024_01_01.zip --region socal
+    oversee-etl run --region socal --start 2025-03-03 --end 2025-03-16 --delete-raw
+    oversee-etl stream --region socal                  # live AISStream feed, Ctrl+C to stop
+    oversee-etl ports data/raw/wpi.csv
+    oversee-etl download-ais 2025-03-03 2025-03-09
+    oversee-etl ais data/raw/ais-2025-03-03.csv.zst --region socal
     oversee-etl aggregate
 """
 
 import argparse
 import logging
+import sys
 from datetime import date, timedelta
 from pathlib import Path
 
 from oversee.config import get_settings
-from oversee.db import get_engine
-from oversee.etl import aggregate, extract, load, transform
+from oversee.etl import aggregate, extract, pipeline, stream
 from oversee.etl.regions import REGIONS
 from oversee.log import setup_logging
 
 logger = logging.getLogger("oversee.etl")
 
 
+def cmd_run(args: argparse.Namespace) -> None:
+    if args.end < args.start:
+        sys.exit("--end must not be before --start")
+    pipeline.run_window(
+        args.start,
+        args.end,
+        REGIONS[args.region],
+        refresh_ports=args.refresh_ports,
+        delete_raw=args.delete_raw,
+    )
+
+
+def cmd_stream(args: argparse.Namespace) -> None:
+    api_key = get_settings().aisstream_api_key
+    if not api_key:
+        sys.exit(
+            "AISSTREAM_API_KEY is not set. Get a free key at https://aisstream.io "
+            "(sign in with GitHub, then Account) and add it to .env"
+        )
+    stream.collect(api_key, REGIONS[args.region], args.minutes, args.flush_seconds)
+
+
 def cmd_ports(args: argparse.Namespace) -> None:
-    with load.source_run("wpi", args.path.name) as run:
-        raw = extract.read_wpi(args.path)
-        ports = transform.clean_wpi(raw)
-        run["rows_read"] = len(raw)
-        run["rows_loaded"] = load.load_ports(ports)
+    path = args.path or extract.download_wpi(refresh=True)
+    pipeline.load_ports_file(path, force=args.force)
 
 
 def cmd_download_ais(args: argparse.Namespace) -> None:
     day = args.start
     while day <= args.end:
-        path = extract.download_ais_day(day)
-        logger.info("AIS file ready", extra={"day": day.isoformat(), "path": str(path)})
+        extract.download_ais_day(day)
         day += timedelta(days=1)
 
 
 def cmd_ais(args: argparse.Namespace) -> None:
     bbox = REGIONS[args.region] if args.region else None
-    with load.source_run("marinecadastre_ais", args.path.name) as run:
-        raw = extract.read_ais(args.path)
-        positions = transform.clean_ais(raw, bbox=bbox)
-        vessels, positions = transform.split_vessels(positions)
-        run["rows_read"] = len(raw)
-        run["rows_loaded"] = load.load_ais(vessels, positions, run["run_id"])
-        logger.info("AIS loaded", extra={"region": args.region, "vessels": len(vessels)})
+    pipeline.load_ais_file(args.path, bbox, force=args.force)
 
 
 def cmd_aggregate(args: argparse.Namespace) -> None:
-    params = aggregate.AggregateParams(
-        radius_m=args.radius_km * 1000,
-        max_sog_knots=args.max_sog,
-        max_gap_hours=args.max_gap_hours,
-        min_dwell_minutes=args.min_dwell_minutes,
+    pipeline.rebuild_aggregates(
+        aggregate.AggregateParams(
+            radius_m=args.radius_km * 1000,
+            max_sog_knots=args.max_sog,
+            max_gap_hours=args.max_gap_hours,
+            min_dwell_minutes=args.min_dwell_minutes,
+        )
     )
-    with load.source_run("aggregate") as run:
-        with get_engine().begin() as conn:
-            counts = aggregate.run(conn, params)
-        run["rows_loaded"] = counts["port_calls"]
-        logger.info("derived tables rebuilt", extra=counts)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(prog="oversee-etl")
     sub = parser.add_subparsers(required=True)
+    regions = sorted(REGIONS)
 
-    p = sub.add_parser("ports", help="Load World Port Index CSV")
-    p.add_argument("path", type=Path)
+    p = sub.add_parser("run", help="Ports, AIS days START..END, then aggregates, end to end")
+    p.add_argument("--region", choices=regions, required=True)
+    p.add_argument("--start", type=date.fromisoformat, required=True)
+    p.add_argument("--end", type=date.fromisoformat, required=True)
+    p.add_argument("--refresh-ports", action="store_true", help="Re-download the World Port Index")
+    p.add_argument(
+        "--delete-raw", action="store_true", help="Delete each AIS file after loading it"
+    )
+    p.set_defaults(func=cmd_run)
+
+    p = sub.add_parser("stream", help="Collect live AIS from AISStream into the database")
+    p.add_argument("--region", choices=regions, required=True)
+    p.add_argument("--minutes", type=float, help="Stop after this many minutes (default: run on)")
+    p.add_argument("--flush-seconds", type=float, default=60, help="Write to the DB this often")
+    p.set_defaults(func=cmd_stream)
+
+    p = sub.add_parser("ports", help="Load the World Port Index (downloads it if no PATH)")
+    p.add_argument("path", type=Path, nargs="?")
+    p.add_argument("--force", action="store_true", help="Load even if this file was loaded")
     p.set_defaults(func=cmd_ports)
 
     p = sub.add_parser("download-ais", help="Download MarineCadastre AIS daily files")
@@ -77,7 +106,8 @@ def main() -> None:
 
     p = sub.add_parser("ais", help="Load one AIS file")
     p.add_argument("path", type=Path)
-    p.add_argument("--region", choices=sorted(REGIONS), help="Keep only positions in region")
+    p.add_argument("--region", choices=regions, help="Keep only positions in region")
+    p.add_argument("--force", action="store_true", help="Load even if this file was loaded")
     p.set_defaults(func=cmd_ais)
 
     defaults = aggregate.DEFAULT_PARAMS
