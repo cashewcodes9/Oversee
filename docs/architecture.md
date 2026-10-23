@@ -1,9 +1,52 @@
 # Architecture
 
+## Layers
+
+```
+MarineCadastre .csv.zst ─► data/raw/ ─► raw lake (Parquet) ─► region slice ─► PostgreSQL/PostGIS ─► FastAPI
+     (one file per day)    (cache)      all US waters,        DuckDB filter,   cleaned positions,
+                                        all columns           pandas rules     derived tables
+```
+
+| Layer | Where | Holds | Written by |
+|---|---|---|---|
+| Download cache | `data/raw/` | source files as published | `extract.download_ais_day` |
+| Raw lake | `LAKE_ROOT`: `s3://oversee-lake` (SeaweedFS) or `data/lake/` | one Parquet file per day, every source column, no filtering | `lake.Lake.ingest_ais_file` |
+| Serving database | PostgreSQL/PostGIS | one region, cleaned, plus port calls and summaries | `load`, `aggregate` |
+
+The lake keeps every day for all US waters in a compact, typed, queryable form, so a new
+region or column means re-reading Parquet, not downloading again. PostgreSQL only holds what
+the API serves.
+
+**Lake layout:** `<root>/ais/date=YYYY-MM-DD/ais-YYYY-MM-DD.parquet`. The `date=` folder is a
+Hive partition, so DuckDB, Athena, Spark or Trino read the whole lake as one table:
+
+```sql
+SELECT date, count(*) FROM read_parquet('s3://oversee-lake/ais/*/*.parquet', hive_partitioning = true)
+GROUP BY date;
+```
+
+**Lineage:** the SHA-256 and size of the source file are stored in each Parquet file's
+key-value metadata. Loading a day from the lake records the same fingerprint in
+`source_runs`, so `already_loaded` treats a day loaded from the lake and the same file loaded
+directly (`oversee-etl ais`) as one.
+
+**Object storage:** locally the compose `lake` service runs SeaweedFS, an Apache-2.0
+S3-compatible server (MinIO no longer publishes community images). DuckDB reaches it through
+its `httpfs` extension with the `S3_*` settings. With `LAKE_ROOT=s3://<bucket>` and no
+`S3_*` settings the same code uses AWS S3 and the standard AWS credential chain. With
+`LAKE_ROOT=data/lake` no server is needed.
+
 ## Pipeline
 
-1. **Extract** (`etl/extract.py`): download daily MarineCadastre AIS zips and read the WPI CSV.
-2. **Transform** (`etl/transform.py`): pure pandas functions that
+1. **Extract** (`etl/extract.py`): download daily MarineCadastre AIS files (cached in
+   `data/raw/`) and read the WPI CSV.
+2. **Lake** (`etl/lake.py`): DuckDB converts each day's `.csv.zst` to Parquet in the lake
+   (about 5 s for 7.6M rows). Days already in the lake are not downloaded again. Loading
+   reads a day back with the region bounding box applied in DuckDB and streams the
+   remaining rows to pandas in chunks. Rows outside the region are counted as
+   `outside_region` in the quality log.
+3. **Transform** (`etl/transform.py`): pure pandas functions that
    - rename source columns to the internal schema
    - parse timestamps as UTC
    - drop invalid MMSIs and out-of-range coordinates
@@ -11,9 +54,16 @@
    - filter to the MVP region bounding box
    - deduplicate on `(mmsi, ts)`
    - split rows into a vessel dimension and a position fact table
-3. **Load** (`etl/load.py`): stage each frame into a temporary table and upsert it into the
+   `etl/clean_sql.py` runs the same rules as DuckDB SQL directly on a lake file, using
+   window functions (`LAG`/`LEAD` over each vessel's track) for duplicates and GPS spikes.
+   The pipeline still uses pandas. `tests/test_clean_sql.py` requires identical rows and
+   drop counts from both. On the four real days 2025-03-03..06 (1.83M rows in `socal`)
+   they matched exactly. The SQL version is the one that scales: it cleans a whole US day
+   (7.8M rows) in about 20 s within `DUCKDB_MEMORY_LIMIT` (2 GB by default), spilling to
+   `DUCKDB_TEMP_DIR` beyond that. That makes it the basis for a cleaned lake layer.
+4. **Load** (`etl/load.py`): stage each frame into a temporary table and upsert it into the
    target table. Re-running the same file is idempotent.
-4. **Aggregate** (`etl/aggregate.py`): a full refresh of all derived tables in one
+5. **Aggregate** (`etl/aggregate.py`): a full refresh of all derived tables in one
    transaction, with SQL doing the work.
    - **Port calls:** positions at ≤ 1 kn within 5 km of a port count as in port. When several
      ports are in range, the nearest one wins. Consecutive in-port reports at the same port
@@ -55,6 +105,9 @@ detecting port calls.
 
 ## Operations
 
+- **Lake storage:** `docker compose up -d --wait lake` starts SeaweedFS (S3 API on :8333,
+  file browser at http://localhost:8888/buckets/). Data lives in the `lakedata` volume.
+  The development credentials in `docker/seaweedfs/s3.json` are for local use only.
 - **Schema:** Alembic revisions in `src/oversee/migrations/versions/` are the single source
   of the schema. In Docker, a one-shot `migrate` service applies them before the API starts;
   locally, run `oversee-db upgrade`.

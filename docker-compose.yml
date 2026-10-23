@@ -24,6 +24,30 @@ services:
       timeout: 5s
       retries: 10
 
+  # S3-compatible object storage for the raw data lake (s3://oversee-lake).
+  # Development credentials are in docker/seaweedfs/s3.json; buckets are created on first
+  # write. Browse files at http://localhost:8888/buckets/
+  # Small volumes without preallocation: the defaults reserve about 1 GB of disk per volume
+  # file (14 GB for one day of data), which counts against Docker's disk image.
+  lake:
+    image: chrislusf/seaweedfs:3.80
+    command: >-
+      server -ip.bind=0.0.0.0 -dir=/data -volume.max=0
+      -master.volumeSizeLimitMB=256 -master.volumePreallocate=false
+      -s3 -s3.config=/etc/seaweedfs/s3.json
+    ports:
+      - "8333:8333"
+      - "8888:8888"
+    volumes:
+      - lakedata:/data
+      - ./docker/seaweedfs/s3.json:/etc/seaweedfs/s3.json:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8333/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
   # Applies pending Alembic revisions, then exits
   migrate:
     build: .
@@ -55,3 +79,4 @@ services:
 
 volumes:
   pgdata:
+  lakedata:

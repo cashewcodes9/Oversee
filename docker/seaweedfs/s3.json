@@ -1,0 +1,9 @@
+{
+  "identities": [
+    {
+      "name": "oversee",
+      "credentials": [{ "accessKey": "oversee", "secretKey": "oversee-secret" }],
+      "actions": ["Admin", "Read", "List", "Tagging", "Write"]
+    }
+  ]
+}

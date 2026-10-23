@@ -4,6 +4,11 @@ Raw files live in `data/raw/` and are never committed (`.gitignore`, plus a pre-
 check that rejects files over 1 MB). Everything here can be fetched again with the
 commands below.
 
+AIS days are also kept as Parquet in the raw lake (`LAKE_ROOT`, by default the
+`s3://oversee-lake` bucket of the compose `lake` service), with every source column and no
+region filter, so `data/raw/` can be cleared with `--delete-raw` once a day is in the lake.
+See [docs/architecture.md](../docs/architecture.md#layers).
+
 ## Sources
 
 | Source | What | Format | How it is fetched | Terms |

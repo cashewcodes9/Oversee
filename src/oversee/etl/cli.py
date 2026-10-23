@@ -6,17 +6,21 @@ Examples:
     oversee-etl ports data/raw/wpi.csv
     oversee-etl download-ais 2025-03-03 2025-03-09
     oversee-etl ais data/raw/ais-2025-03-03.csv.zst --region socal
+    oversee-etl lake-ingest 2025-03-03 2025-03-09 --delete-raw
+    oversee-etl lake-load 2025-03-03 2025-03-09 --region socal
     oversee-etl aggregate
 """
 
 import argparse
 import logging
 import sys
+from collections.abc import Iterator
 from datetime import date, timedelta
 from pathlib import Path
 
 from oversee.config import get_settings
 from oversee.etl import aggregate, extract, pipeline, stream
+from oversee.etl.lake import open_lake
 from oversee.etl.regions import REGIONS
 from oversee.log import setup_logging
 
@@ -62,6 +66,27 @@ def cmd_ais(args: argparse.Namespace) -> None:
     pipeline.load_ais_file(args.path, bbox, force=args.force)
 
 
+def _days(args: argparse.Namespace) -> Iterator[date]:
+    if args.end < args.start:
+        sys.exit("END must not be before START")
+    day = args.start
+    while day <= args.end:
+        yield day
+        day += timedelta(days=1)
+
+
+def cmd_lake_ingest(args: argparse.Namespace) -> None:
+    lake = open_lake()
+    for day in _days(args):
+        pipeline.ingest_ais_day(lake, day, delete_raw=args.delete_raw)
+
+
+def cmd_lake_load(args: argparse.Namespace) -> None:
+    lake = open_lake()
+    for day in _days(args):
+        pipeline.load_ais_day(lake, day, REGIONS[args.region], force=args.force)
+
+
 def cmd_aggregate(args: argparse.Namespace) -> None:
     pipeline.rebuild_aggregates(
         aggregate.AggregateParams(
@@ -84,7 +109,7 @@ def main() -> None:
     p.add_argument("--end", type=date.fromisoformat, required=True)
     p.add_argument("--refresh-ports", action="store_true", help="Re-download the World Port Index")
     p.add_argument(
-        "--delete-raw", action="store_true", help="Delete each AIS file after loading it"
+        "--delete-raw", action="store_true", help="Delete each AIS file once it is in the lake"
     )
     p.set_defaults(func=cmd_run)
 
@@ -109,6 +134,21 @@ def main() -> None:
     p.add_argument("--region", choices=regions, help="Keep only positions in region")
     p.add_argument("--force", action="store_true", help="Load even if this file was loaded")
     p.set_defaults(func=cmd_ais)
+
+    p = sub.add_parser("lake-ingest", help="Download AIS days START..END into the Parquet lake")
+    p.add_argument("start", type=date.fromisoformat)
+    p.add_argument("end", type=date.fromisoformat)
+    p.add_argument(
+        "--delete-raw", action="store_true", help="Delete each AIS file once it is in the lake"
+    )
+    p.set_defaults(func=cmd_lake_ingest)
+
+    p = sub.add_parser("lake-load", help="Load AIS days START..END from the lake for a region")
+    p.add_argument("start", type=date.fromisoformat)
+    p.add_argument("end", type=date.fromisoformat)
+    p.add_argument("--region", choices=regions, required=True)
+    p.add_argument("--force", action="store_true", help="Load even if this file was loaded")
+    p.set_defaults(func=cmd_lake_load)
 
     defaults = aggregate.DEFAULT_PARAMS
     p = sub.add_parser("aggregate", help="Build port calls and summary tables")

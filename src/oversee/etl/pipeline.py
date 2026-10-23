@@ -6,6 +6,7 @@ tests, a scheduler or a notebook.
 
 import logging
 from collections import Counter
+from collections.abc import Iterable
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -14,6 +15,7 @@ from sqlalchemy import text
 
 from oversee.db import get_engine
 from oversee.etl import aggregate, extract, load, transform
+from oversee.etl.lake import Lake, LakeFile, open_lake
 from oversee.etl.regions import BoundingBox
 
 AIS_SOURCE = "marinecadastre_ais"
@@ -50,26 +52,89 @@ def load_ais_file(path: Path, bbox: BoundingBox | None, force: bool = False) -> 
         return None
 
     with load.source_run(AIS_SOURCE, path.name, sha, size) as run:
-        kept: list[pd.DataFrame] = []
-        counts: Counter = Counter()
-        rows_read = 0
-        for chunk in extract.read_ais_chunks(path):
-            rows_read += len(chunk)
-            rows, chunk_counts = transform.validate_positions(transform.normalise_ais(chunk), bbox)
-            kept.append(rows)
-            counts.update(chunk_counts)
-            logger.debug("chunk processed", extra={"rows_read": rows_read, "kept": len(rows)})
+        _load_ais_chunks(run, extract.read_ais_chunks(path), bbox)
+    return run["rows_loaded"]
 
+
+def _load_ais_chunks(
+    run: dict,
+    chunks: Iterable[pd.DataFrame],
+    bbox: BoundingBox | None,
+    rows_read: int | None = None,
+    pre_filtered: int = 0,
+) -> None:
+    """Clean and load AIS chunks inside an open source_run.
+
+    rows_read and pre_filtered are for sources that already dropped rows outside the
+    region (the lake); those rows are counted as outside_region.
+    """
+    kept: list[pd.DataFrame] = []
+    counts: Counter = Counter()
+    if pre_filtered:
+        counts["outside_region"] = pre_filtered
+    seen = 0
+    for chunk in chunks:
+        seen += len(chunk)
+        rows, chunk_counts = transform.validate_positions(transform.normalise_ais(chunk), bbox)
+        kept.append(rows)
+        counts.update(chunk_counts)
+        logger.debug("chunk processed", extra={"rows_read": seen, "kept": len(rows)})
+
+    if kept:
         positions, track_counts = transform.clean_tracks(pd.concat(kept, ignore_index=True))
         counts.update(track_counts)
-        vessels, positions = transform.split_vessels(positions)
+    else:
+        columns = dict.fromkeys(transform.POSITION_COLUMNS + transform.VESSEL_COLUMNS)
+        positions = pd.DataFrame(columns=list(columns))
+    vessels, positions = transform.split_vessels(positions)
 
-        run["rows_read"] = rows_read
-        run["rows_loaded"] = load.load_ais(vessels, positions, run["run_id"])
-        load.load_quality_log(run["run_id"], counts)
-        logger.info(
-            "AIS file loaded",
-            extra={"vessels": len(vessels), "positions_kept": len(positions), **counts},
+    run["rows_read"] = rows_read if rows_read is not None else seen
+    run["rows_loaded"] = load.load_ais(vessels, positions, run["run_id"])
+    load.load_quality_log(run["run_id"], counts)
+    logger.info(
+        "AIS file loaded",
+        extra={"vessels": len(vessels), "positions_kept": len(positions), **counts},
+    )
+
+
+def ingest_ais_day(lake: Lake, day: date, delete_raw: bool = False) -> LakeFile:
+    """Make sure one AIS day is in the lake: download and convert it unless it is there.
+
+    A day already in the lake is not downloaded again.
+    """
+    if stored := lake.ais_day(day):
+        logger.info("AIS day already in lake", extra={"uri": stored.uri})
+        return stored
+    path = extract.download_ais_day(day)
+    stored = lake.ingest_ais_file(path, day)
+    if delete_raw:
+        path.unlink()
+        logger.info("raw file deleted", extra={"path": str(path)})
+    return stored
+
+
+def load_ais_day(
+    lake: Lake, day: date, bbox: BoundingBox | None, force: bool = False
+) -> int | None:
+    """Load one AIS day from the lake into PostgreSQL, filtering to bbox in DuckDB.
+
+    Returns positions inserted, or None if the source file was loaded before (from
+    the lake or directly with load_ais_file).
+    """
+    stored = lake.ais_day(day)
+    if stored is None:
+        raise FileNotFoundError(f"AIS day {day} is not in the lake; run lake-ingest first")
+    if not force and load.already_loaded(AIS_SOURCE, stored.source_sha256):
+        logger.info("file already loaded, skipping", extra={"uri": stored.uri})
+        return None
+
+    with load.source_run(
+        AIS_SOURCE, Path(stored.uri).name, stored.source_sha256, stored.source_bytes
+    ) as run:
+        chunks = list(lake.read_ais_day(day, bbox))
+        in_region = sum(len(c) for c in chunks)
+        _load_ais_chunks(
+            run, chunks, bbox, rows_read=stored.rows, pre_filtered=stored.rows - in_region
         )
     return run["rows_loaded"]
 
@@ -95,21 +160,19 @@ def run_window(
     refresh_ports: bool = False,
     delete_raw: bool = False,
 ) -> None:
-    """End to end: ports, then each AIS day in [start, end], then aggregates.
+    """End to end: ports, then each AIS day in [start, end] through the lake, then aggregates.
 
-    Each day is downloaded, loaded and (optionally) deleted before the next, so
-    disk use stays at about one daily file.
+    Each day is downloaded, written to the lake, (optionally) deleted from data/raw,
+    then loaded from the lake for the region, before the next day starts.
     """
     if refresh_ports or ports_loaded() == 0:
         load_ports_file(extract.download_wpi(refresh=refresh_ports))
 
+    lake = open_lake()
     day = start
     while day <= end:
-        path = extract.download_ais_day(day)
-        load_ais_file(path, bbox)
-        if delete_raw:
-            path.unlink()
-            logger.info("raw file deleted", extra={"path": str(path)})
+        ingest_ais_day(lake, day, delete_raw=delete_raw)
+        load_ais_day(lake, day, bbox)
         day += timedelta(days=1)
 
     rebuild_aggregates()

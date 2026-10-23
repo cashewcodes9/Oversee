@@ -4,6 +4,8 @@ research/
 # Data files (downloaded / generated, never committed)
 data/raw/*
 data/processed/*
+data/lake/
+data/tmp/
 !data/raw/.gitkeep
 !data/processed/.gitkeep
 *.part

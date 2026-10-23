@@ -1,15 +1,21 @@
 """Load small generated files through the real pipeline into a fresh, migrated database."""
 
+from datetime import date
+
+import duckdb
 import pandas as pd
 import pytest
 from sqlalchemy import create_engine, text
 
 from oversee import migrate
 from oversee.etl import load, pipeline
+from oversee.etl.lake import Lake
 from oversee.etl.regions import REGIONS
 from oversee.etl.stream import batch_frames, parse_message
 from tests.test_stream import position_message, static_message
 from tests.test_transform import ais_row
+
+DAY = date(2025, 3, 3)
 
 
 @pytest.fixture
@@ -70,6 +76,43 @@ def test_identical_file_is_skipped_unless_forced(etl_engine, tmp_path):
     assert pipeline.load_ais_file(path, REGIONS["socal"]) is None
     assert pipeline.load_ais_file(path, REGIONS["socal"], force=True) == 0  # rows already there
     assert scalar(etl_engine, "SELECT count(*) FROM source_runs") == 2
+
+
+def test_lake_day_loads_like_the_raw_file(etl_engine, tmp_path):
+    rows = [
+        ais_row(base_date_time="2025-03-03 00:00:00"),
+        ais_row(base_date_time="2025-03-03 00:01:00", longitude=-118.21),
+        ais_row(mmsi=123, base_date_time="2025-03-03 00:00:00"),  # invalid MMSI
+        ais_row(mmsi=367000003, latitude=47.6, longitude=-122.3),  # Seattle, outside socal
+    ]
+    raw = write_ais(tmp_path, rows)
+    lake = Lake(str(tmp_path / "lake"), duckdb.connect())
+    lake.ingest_ais_file(raw, DAY)
+
+    assert pipeline.load_ais_day(lake, DAY, REGIONS["socal"]) == 2
+    with etl_engine.connect() as conn:
+        quality = dict(conn.execute(text("SELECT rule, rows_dropped FROM data_quality_log")).all())
+        run = conn.execute(text("SELECT rows_read, rows_loaded FROM source_runs")).one()
+    assert quality == {"invalid_mmsi": 1, "outside_region": 1}
+    assert (run.rows_read, run.rows_loaded) == (4, 2)
+
+    # Same source fingerprint, so the raw file is recognised as already loaded
+    assert pipeline.load_ais_file(raw, REGIONS["socal"]) is None
+    assert pipeline.load_ais_day(lake, DAY, REGIONS["socal"]) is None
+
+
+def test_lake_day_with_no_rows_in_region_loads_nothing(etl_engine, tmp_path):
+    lake = Lake(str(tmp_path / "lake"), duckdb.connect())
+    lake.ingest_ais_file(write_ais(tmp_path, [ais_row(latitude=47.6, longitude=-122.3)]), DAY)
+
+    assert pipeline.load_ais_day(lake, DAY, REGIONS["socal"]) == 0
+    assert scalar(etl_engine, "SELECT status FROM source_runs") == "success"
+
+
+def test_lake_load_needs_the_day_ingested(etl_engine, tmp_path):
+    lake = Lake(str(tmp_path / "lake"), duckdb.connect())
+    with pytest.raises(FileNotFoundError):
+        pipeline.load_ais_day(lake, DAY, REGIONS["socal"])
 
 
 def test_ports_file_with_dms_coordinates_loads(etl_engine, tmp_path):

@@ -14,6 +14,12 @@ def db(c):
     c.run("docker compose up -d --wait db")
 
 
+@task
+def lake(c):
+    """Start the SeaweedFS S3 lake and wait until it is healthy."""
+    c.run("docker compose up -d --wait lake")
+
+
 @task(pre=[db])
 def migrate(c):
     """Apply pending database migrations."""
