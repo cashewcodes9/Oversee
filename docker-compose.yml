@@ -6,6 +6,14 @@ x-app-env: &app-env
   POSTGRES_PORT: 5432
   LOG_LEVEL: ${LOG_LEVEL:-INFO}
   LOG_FORMAT: json
+  # Lets `docker compose run --rm api oversee-etl ...` use the lake service
+  LAKE_ROOT: s3://oversee-lake
+  S3_ENDPOINT: lake:8333
+  S3_ACCESS_KEY_ID: oversee
+  S3_SECRET_ACCESS_KEY: oversee-secret
+  S3_USE_SSL: "false"
+  S3_URL_STYLE: path
+  DUCKDB_TEMP_DIR: /tmp/duckdb/spill
 
 services:
   db:
