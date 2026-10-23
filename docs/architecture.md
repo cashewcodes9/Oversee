@@ -53,6 +53,17 @@ Every load is recorded in `source_runs` with its status, row counts and any erro
 indexes. They support radius queries such as `ST_DWithin(p.geom, port.geom, 5000)` when
 detecting port calls.
 
+## Operations
+
+- **Schema:** Alembic revisions in `src/oversee/migrations/versions/` are the single source
+  of the schema. In Docker, a one-shot `migrate` service applies them before the API starts;
+  locally, run `oversee-db upgrade`.
+- **Logging:** text locally, JSON in containers (`LOG_FORMAT`). ETL records carry the
+  `run_id` of their `source_runs` row, so a log line can be traced to the run it belongs to.
+  The API logs method, path, status and duration for each request.
+- **CI:** GitHub Actions runs lint, format check, unit tests, integration tests against a
+  PostGIS service, a migration upgrade and a Docker build on each push and pull request.
+
 ## MVP scope
 
 - one region (`socal`: Los Angeles / Long Beach)
