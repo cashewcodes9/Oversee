@@ -10,6 +10,10 @@ data/tmp/
 !data/processed/.gitkeep
 *.part
 
+# Streamlit agent skills: machine-specific symlinks that `streamlit run` may create
+.agents/skills/developing-with-streamlit
+.claude/skills/developing-with-streamlit
+
 # Environment
 .env
 .venv/

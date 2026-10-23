@@ -52,7 +52,8 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - run: pip install -e ".[dev]"
+      # dashboard extras so tests/test_dashboard.py renders the pages instead of skipping
+      - run: pip install -e ".[dashboard,dev]"
       - name: Unit tests
         run: pytest tests --ignore=tests/integration -q
       - name: Integration tests

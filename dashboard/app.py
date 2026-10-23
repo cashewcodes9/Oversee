@@ -1,59 +1,36 @@
-"""Streamlit dashboard for port activity KPIs. Reads everything through the REST API."""
+"""Streamlit dashboard for port activity KPIs. Reads everything through the REST API.
 
-import os
+Run with `make dashboard` (or `make dev` for the API too). Each page lives in views/.
+"""
 
 import pandas as pd
-import plotly.express as px
-import requests
 import streamlit as st
+from common import API, get
 
-API = os.environ.get("API_BASE_URL", "http://localhost:8000")
+st.set_page_config(page_title="Oversee – Port Activity", page_icon="⚓", layout="wide")
 
+# Paths are relative to this file; Streamlit resolves them against the main script
+pages = [
+    st.Page("views/overview.py", title="Overview", icon="🧭", default=True),
+    st.Page("views/ports.py", title="Busiest ports", icon="⚓"),
+    st.Page("views/density.py", title="Vessel density", icon="🗺️"),
+    st.Page("views/routes.py", title="Routes", icon="🛳️"),
+    st.Page("views/peaks.py", title="Busiest periods", icon="🕒"),
+    st.Page("views/speed_dwell.py", title="Speed and dwell", icon="⏱️"),
+]
+page = st.navigation(pages)
 
-def get(path: str, **params):
-    resp = requests.get(f"{API}{path}", params=params, timeout=10)
-    resp.raise_for_status()
-    return resp.json()
-
-
-st.set_page_config(page_title="Oversee – Port Activity", layout="wide")
-st.title("Port Activity Intelligence")
-
-try:
-    kpis = get("/kpis/overview")
-except requests.RequestException as exc:
-    st.error(f"API not reachable at {API}: {exc}")
-    st.stop()
-
-cols = st.columns(4)
-cols[0].metric("Ports", kpis["ports"])
-cols[1].metric("Vessels", kpis["vessels"])
-cols[2].metric("Positions", f"{kpis['positions']:,}")
-cols[3].metric("Port calls", kpis["port_calls"])
-
-ports = pd.DataFrame(get("/ports", limit=1000))
-if ports.empty:
-    st.info("No ports loaded yet. Run `oversee-etl ports <wpi.csv>`.")
-    st.stop()
-
-st.subheader("Ports")
-st.map(ports, latitude="latitude", longitude="longitude")
-
-st.subheader("Daily activity")
-# Only ports with activity: the full list is alphabetical and capped at 1000
-active = pd.DataFrame(get("/ports", active=True, limit=1000))
-if active.empty:
-    st.info("No port activity yet. Load AIS data, then run `oversee-etl aggregate`.")
-    st.stop()
-port_name = st.selectbox("Port", active["name"])
-port_id = int(active.loc[active["name"] == port_name, "port_id"].iloc[0])
-activity = pd.DataFrame(get(f"/ports/{port_id}/activity"))
-if activity.empty:
-    st.info("No activity for this port in the loaded data.")
-else:
-    st.plotly_chart(
-        px.bar(activity, x="activity_date", y=["arrivals", "departures"], barmode="group"),
-        use_container_width=True,
+with st.sidebar:
+    st.markdown("### Oversee")
+    st.caption(
+        "Port activity intelligence from open AIS vessel data. Start with **Overview**, "
+        "then use the pages above to drill into ports, traffic, routes and timing."
     )
+    kpis = get("/kpis/overview")
+    if kpis["first_position_ts"]:
+        first = pd.Timestamp(kpis["first_position_ts"]).date()
+        last = pd.Timestamp(kpis["last_position_ts"]).date()
+        st.caption(f"**Data:** {first} to {last} · Los Angeles / Long Beach region")
+    st.caption(f"**API:** {API}")
 
-# TODO: busiest ports ranking, route summary, hourly peak heatmap
+page.run()

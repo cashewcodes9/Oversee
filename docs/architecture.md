@@ -105,7 +105,10 @@ detecting port calls.
 
 ## Operations
 
-- **Lake storage:** `docker compose up -d --wait lake` starts SeaweedFS (S3 API on :8333,
+- **Developer commands:** the `Makefile` wraps the common commands (`make help`). `make dev`
+  starts db and lake, applies migrations, then runs API and dashboard together. `make etl`
+  loads a window. `tasks.py` has the same commands as invoke tasks.
+- **Lake storage:** `docker compose up -d --wait lake` (or `make up`) starts SeaweedFS (S3 API on :8333,
   file browser at http://localhost:8888/buckets/). Data lives in the `lakedata` volume.
   The development credentials in `docker/seaweedfs/s3.json` are for local use only.
 - **Schema:** Alembic revisions in `src/oversee/migrations/versions/` are the single source
@@ -122,4 +125,22 @@ detecting port calls.
 - one region (`socal`: Los Angeles / Long Beach)
 - 1–2 weeks of AIS data
 - 4–6 API endpoints
-- a dashboard with 3–5 charts
+- a six-page dashboard (see below)
+
+## Dashboard
+
+Streamlit, reading only from the API. `dashboard/app.py` sets up navigation and the sidebar.
+Each page in `dashboard/views/` follows the same pattern: a title, an explanation block
+(`common.explain`: what it shows, how to read it, notes and limitations), then charts.
+
+| Page | API endpoints | Answers |
+|---|---|---|
+| Overview | `/kpis/overview`, `/kpis/daily` | How much data is loaded; how busy each day was |
+| Busiest ports | `/kpis/ports`, `/ports?active=true`, `/ports/{id}/activity` | Which ports get most visits |
+| Vessel density | `/kpis/density` | Where vessels spend time on the water |
+| Routes | `/kpis/routes` | Most common port-to-port trips and their duration |
+| Busiest periods | `/kpis/peaks` | Arrival peaks by local weekday and hour |
+| Speed and dwell | `/kpis/dwell`, `/kpis/speed` | Time in port; how often and fast vessel groups move |
+
+Times on the busiest-periods page are local (`America/Los_Angeles`, the loaded region);
+daily charts use UTC days, matching `port_activity_daily`.

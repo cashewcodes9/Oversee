@@ -14,3 +14,5 @@ def test_health():
 def test_openapi_lists_endpoints():
     paths = client.get("/openapi.json").json()["paths"]
     assert {"/ports", "/ports/{port_id}/activity", "/vessels", "/kpis/overview"} <= set(paths)
+    dashboard_kpis = {"daily", "ports", "density", "routes", "peaks", "dwell", "speed"}
+    assert {f"/kpis/{name}" for name in dashboard_kpis} <= set(paths)
