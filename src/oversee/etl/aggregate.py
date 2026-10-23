@@ -89,20 +89,22 @@ WHERE prev_port_id IS NOT NULL
   AND prev_departure_ts IS NOT NULL
 """
 
-# unique_vessels counts every vessel present on a day; open calls run to the end of the data.
+# unique_vessels counts every vessel present on a day. An open call (no departure yet) runs to
+# that vessel's own last report, never to the newest report in the table: live data can be
+# months newer than a batch window.
 PORT_ACTIVITY_DAILY_SQL = """
 INSERT INTO port_activity_daily
     (port_id, activity_date, arrivals, departures, unique_vessels, avg_dwell_hours)
-WITH data_end AS (
-    SELECT max(ts) AS ts FROM vessel_positions
+WITH last_seen AS (
+    SELECT mmsi, max(ts) AS ts FROM vessel_positions GROUP BY mmsi
 ),
 presence AS (
     SELECT c.port_id, CAST(d AS DATE) AS activity_date, count(DISTINCT c.mmsi) AS unique_vessels
     FROM port_calls c
-    CROSS JOIN data_end e
+    JOIN last_seen s USING (mmsi)
     CROSS JOIN LATERAL generate_series(
         date_trunc('day', c.arrival_ts AT TIME ZONE 'UTC'),
-        date_trunc('day', coalesce(c.departure_ts, e.ts) AT TIME ZONE 'UTC'),
+        date_trunc('day', coalesce(c.departure_ts, s.ts) AT TIME ZONE 'UTC'),
         INTERVAL '1 day'
     ) d
     GROUP BY 1, 2

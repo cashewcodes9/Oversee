@@ -116,6 +116,20 @@ def test_daily_activity(conn, ports):
     assert (day2.arrivals, day2.departures, day2.unique_vessels) == (0, 1, 1)
 
 
+def test_open_call_presence_ends_at_the_vessels_own_last_report(conn, ports):
+    # Vessel still docked when its data ends; another vessel reports 30 days later (live feed)
+    add_track(conn, 333333333, [(0, AT_SEA, 12.0), *stay(3, 4, LONG_BEACH)])
+    add_track(conn, 444444444, [(30 * 24, AT_SEA, 12.0)])
+
+    aggregate.run(conn)
+
+    days = conn.execute(
+        text("SELECT count(*) FROM port_activity_daily WHERE port_id = :p"),
+        {"p": ports["Long Beach"]},
+    ).scalar()
+    assert days == 1
+
+
 def test_call_open_at_end_of_data_has_no_departure(conn, ports):
     add_track(conn, 333333333, [(0, AT_SEA, 12.0), *stay(3, 4, LONG_BEACH)])
 
