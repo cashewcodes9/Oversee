@@ -3,16 +3,20 @@
 ## Layers
 
 ```
-MarineCadastre .csv.zst ─► data/raw/ ─► raw lake (Parquet) ─► region slice ─► PostgreSQL/PostGIS ─► FastAPI
-     (one file per day)    (cache)      all US waters,        DuckDB filter,   cleaned positions,
-                                        all columns           pandas rules     derived tables
+MarineCadastre .csv.zst ─► data/raw/ ─► raw lake (Parquet) ─► region slice ─► PostgreSQL ──► dbt models ─► FastAPI
+     (one file per day)    (cache)      all US waters,        DuckDB filter,   public:        staging,
+                                        all columns           pandas rules     loaded tables  intermediate,
+                                                                                              analytics marts
 ```
+
+Dagster orchestrates the whole chain as assets, with daily partitions for AIS days.
 
 | Layer | Where | Holds | Written by |
 |---|---|---|---|
 | Download cache | `data/raw/` | source files as published | `extract.download_ais_day` |
 | Raw lake | `LAKE_ROOT`: `s3://oversee-lake` (SeaweedFS) or `data/lake/` | one Parquet file per day, every source column, no filtering | `lake.Lake.ingest_ais_file` |
-| Serving database | PostgreSQL/PostGIS | one region, cleaned, plus port calls and summaries | `load`, `aggregate` |
+| Loaded tables | PostgreSQL/PostGIS, schema `public` | one region, cleaned: ports, vessels, positions, lineage and quality logs | `load` (schema by Alembic) |
+| Analytics | PostgreSQL, schemas `staging`, `intermediate`, `analytics` | port calls, voyages, daily summaries, dimensions | dbt (`transform/`) |
 
 The lake keeps every day for all US waters in a compact, typed, queryable form, so a new
 region or column means re-reading Parquet, not downloading again. PostgreSQL only holds what
@@ -63,8 +67,8 @@ its `httpfs` extension with the `S3_*` settings. With `LAKE_ROOT=s3://<bucket>` 
    `DUCKDB_TEMP_DIR` beyond that. That makes it the basis for a cleaned lake layer.
 4. **Load** (`etl/load.py`): stage each frame into a temporary table and upsert it into the
    target table. Re-running the same file is idempotent.
-5. **Aggregate** (`etl/aggregate.py`): a full refresh of all derived tables in one
-   transaction, with SQL doing the work.
+5. **Transform in SQL with dbt** (`transform/`, run by `etl/aggregate.py` or Dagster): a
+   full rebuild of every model, followed by its data tests. See "Transformation with dbt".
    - **Port calls:** positions at ≤ 1 kn within 5 km of a port count as in port. When several
      ports are in range, the nearest one wins. Consecutive in-port reports at the same port
      form one call (gaps-and-islands with window functions). A reporting gap over 6 h splits
@@ -76,7 +80,8 @@ its `httpfs` extension with the `S3_*` settings. With `LAKE_ROOT=s3://<bucket>` 
    - **Route summary:** voyages per origin, destination and departure day, with average
      duration.
 
-   Every threshold can be tuned with `oversee-etl aggregate --help`.
+   Every threshold is a dbt variable (`port_call_*` in `transform/dbt_project.yml`), also
+   exposed as flags on `oversee-etl aggregate --help`.
 
    Known limitations:
    - Arrivals are only as precise as the AIS reporting interval.
@@ -84,20 +89,80 @@ its `httpfs` extension with the `S3_*` settings. With `LAKE_ROOT=s3://<bucket>` 
      their arrival.
    - Anchorages within the radius count as port time.
 
-Every load is recorded in `source_runs` with its status, row counts and any error.
+Every load is recorded in `source_runs` with its status, row counts and any error. A dbt
+build through `oversee-etl aggregate` is recorded too (source `dbt`).
+
+## Transformation with dbt
+
+The dbt project in `transform/` owns everything derived from the loaded tables. It reads the
+three tables the ETL loads as **sources** and builds three layers:
+
+| Layer | Schema | Materialized | Models |
+|---|---|---|---|
+| Staging | `staging` | views | `stg_ports`, `stg_vessels`, `stg_positions`: one per source, column selection only |
+| Intermediate | `intermediate` | view | `int_in_port_reports`: reports at low speed near a port, nearest port wins (PostGIS) |
+| Marts | `analytics` | tables | `fct_port_calls`, `fct_voyages`, `agg_port_activity_daily`, `agg_route_summary`, `dim_ports`, `dim_vessels` |
+
+```
+ports ─────────────► stg_ports ─────┬─► int_in_port_reports ─► fct_port_calls ─┬─► fct_voyages ─► agg_route_summary
+vessel_positions ──► stg_positions ─┘                                          ├─► agg_port_activity_daily
+vessels ───────────► stg_vessels ──────────────────────────────────────────────┴─► dim_ports, dim_vessels
+```
+
+- **Tests:** 39 data tests run on every build. They cover unique and not-null keys,
+  relationships between calls, voyages, ports and vessels, accepted vessel groups, and four
+  singular tests in `transform/tests/`: closed calls meet the minimum dwell, a vessel's
+  calls never overlap, voyages move forward in time between different ports, and there is
+  one activity row per port and day. A failing test fails the build.
+- **Exposures:** the KPI API and the dashboard are declared as exposures, so the lineage
+  graph in `make dbt-docs` ends at the products that use the data.
+- **Running it:** `oversee-dbt <command>` (or `make dbt-build`, `make dbt-docs`) fills the
+  `POSTGRES_*` connection from `.env` and points dbt at `transform/`. `oversee-etl
+  aggregate` and `oversee-etl run` call `dbt build` the same way.
+- **Migration from Python:** the SQL is the same as the earlier Python aggregation step.
+  On the four loaded days, the dbt marts matched its tables row for row: 1,381 port calls,
+  159 voyages, 52 port-days and 43 route-days. Alembic revision `0003` dropped the old
+  tables.
+
+## Orchestration with Dagster
+
+`src/oversee/orchestration/` defines the pipeline as Dagster software-defined assets. Each
+asset calls the same pipeline functions as the CLI:
+
+| Asset | Group | Partitions | Does |
+|---|---|---|---|
+| `ports` | ingest | none | Load the World Port Index (skipped if already loaded) |
+| `ais_lake_day` | ingest | daily, 2025-03-03..16 | Download a day into the Parquet lake |
+| `vessel_positions`, `vessels` | ingest | daily | Load the day for the region from the lake (one step, two tables) |
+| every dbt model | `dbt_staging`, `dbt_intermediate`, `dbt_marts` | none | `dbt build`, through `dagster-dbt` |
+
+The dbt sources point at the ingest assets (`meta.dagster.asset_key`), so Dagster draws one
+graph from the raw download to the marts. dbt tests appear as **asset checks**, alongside a
+cleaning-quality check on `vessel_positions` that warns when more than 1% of in-region rows
+were dropped. Each ingest run records metadata: the lake URI, row counts and rows dropped
+per cleaning rule.
+
+There are two jobs: `ingest_ais_day` (partitioned, so days can be backfilled from the UI)
+and `refresh_analytics` (`dbt build`). The `refresh_analytics_hourly` schedule runs the
+second one every hour. It is stopped by default and meant for when the live collector is
+running.
+
+`make dagster` starts the UI on http://localhost:3000, with run history in `.dagster/`.
 
 ## Data model
 
-| Table                 | Grain                                  | Role       |
-|-----------------------|----------------------------------------|------------|
-| `source_runs`         | one pipeline run                       | lineage    |
-| `ports`               | one WPI port                           | dimension  |
-| `vessels`             | one MMSI (latest attributes)           | dimension  |
-| `vessel_positions`    | one AIS report `(mmsi, ts)`            | fact       |
-| `port_calls`          | one vessel stay at one port            | derived    |
-| `vessel_routes`       | one voyage between consecutive calls   | derived    |
-| `port_activity_daily` | port × day                             | aggregate  |
-| `route_summary`       | origin × destination × day             | aggregate  |
+| Table | Grain | Role | Owner |
+|---|---|---|---|
+| `source_runs` | one pipeline run | lineage | Alembic, ETL |
+| `data_quality_log` | rule × run | lineage | Alembic, ETL |
+| `ports` | one WPI port | source | Alembic, ETL |
+| `vessels` | one MMSI (latest attributes) | source | Alembic, ETL |
+| `vessel_positions` | one AIS report `(mmsi, ts)` | source | Alembic, ETL |
+| `analytics.fct_port_calls` | one vessel stay at one port | fact | dbt |
+| `analytics.fct_voyages` | one trip between consecutive calls | fact | dbt |
+| `analytics.agg_port_activity_daily` | port × day | aggregate | dbt |
+| `analytics.agg_route_summary` | origin × destination × day | aggregate | dbt |
+| `analytics.dim_ports`, `analytics.dim_vessels` | one port / vessel, with totals | dimension | dbt |
 
 `ports.geom` and `vessel_positions.geom` are generated PostGIS geography columns with GiST
 indexes. They support radius queries such as `ST_DWithin(p.geom, port.geom, 5000)` when
@@ -107,18 +172,22 @@ detecting port calls.
 
 - **Developer commands:** the `Makefile` wraps the common commands (`make help`). `make dev`
   starts db and lake, applies migrations, then runs API and dashboard together. `make etl`
-  loads a window. `tasks.py` has the same commands as invoke tasks.
+  loads a window. `make dbt-build`, `make dbt-docs` and `make dagster` run the
+  transformation and orchestration tools. `tasks.py` has the same commands as invoke tasks.
 - **Lake storage:** `docker compose up -d --wait lake` (or `make up`) starts SeaweedFS (S3 API on :8333,
   file browser at http://localhost:8888/buckets/). Data lives in the `lakedata` volume.
   The development credentials in `docker/seaweedfs/s3.json` are for local use only.
-- **Schema:** Alembic revisions in `src/oversee/migrations/versions/` are the single source
-  of the schema. In Docker, a one-shot `migrate` service applies them before the API starts;
+- **Schema:** Alembic revisions in `src/oversee/migrations/versions/` own the loaded
+  tables (`public`); dbt owns the `staging`, `intermediate` and `analytics` schemas. In
+  Docker, a one-shot `migrate` service applies the revisions before the API starts;
   locally, run `oversee-db upgrade`.
 - **Logging:** text locally, JSON in containers (`LOG_FORMAT`). ETL records carry the
   `run_id` of their `source_runs` row, so a log line can be traced to the run it belongs to.
   The API logs method, path, status and duration for each request.
-- **CI:** GitHub Actions runs lint, format check, unit tests, integration tests against a
-  PostGIS service, a migration upgrade and a Docker build on each push and pull request.
+- **CI:** on each push and pull request, GitHub Actions runs lint, format check, unit
+  tests (including the Dagster asset graph), integration tests against a PostGIS service
+  (including real `dbt build` runs), a migration upgrade, and a Docker build with
+  `oversee-dbt parse`.
 
 ## MVP scope
 
@@ -143,4 +212,4 @@ Each page in `dashboard/views/` follows the same pattern: a title, an explanatio
 | Speed and dwell | `/kpis/dwell`, `/kpis/speed` | Time in port; how often and fast vessel groups move |
 
 Times on the busiest-periods page are local (`America/Los_Angeles`, the loaded region);
-daily charts use UTC days, matching `port_activity_daily`.
+daily charts use UTC days, matching `analytics.agg_port_activity_daily`.

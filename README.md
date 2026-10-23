@@ -24,13 +24,18 @@ KPIs, and a dashboard visualises them.
 
 ```
 MarineCadastre AIS ─► raw lake (Parquet on S3) ─┐
-                      DuckDB, SeaweedFS locally  ├─► ETL (transform → load) ─► PostgreSQL/PostGIS ─► FastAPI ─► Dashboard
-World Port Index ───────────────────────────────┘     src/oversee/etl           migrations          src/oversee/api   dashboard/
+                      DuckDB, SeaweedFS locally  ├─► Python ETL ─► PostgreSQL ─► dbt models ─► FastAPI ─► Dashboard
+World Port Index ───────────────────────────────┘    clean, load    loaded tables  staging → marts
+                                                                                    + data tests
+└──────────────────────── orchestrated by Dagster: assets, daily partitions, lineage ────────────────────────┘
 ```
 
 Each AIS day is kept unfiltered as Parquet in an S3-compatible lake, and only the region
-being analysed is cleaned into PostgreSQL. See [docs/architecture.md](docs/architecture.md)
-for the layers, data model and pipeline details.
+being analysed is cleaned into PostgreSQL. **dbt** turns the loaded positions into port
+calls, voyages and daily summaries, and tests them on every build. **Dagster** runs the
+whole chain as one asset graph, from raw download to dashboard tables. See
+[docs/architecture.md](docs/architecture.md) for the layers, data model and pipeline
+details.
 
 ## Stack
 
@@ -39,6 +44,8 @@ for the layers, data model and pipeline details.
 | Data       | PostgreSQL 16 + PostGIS, Alembic      |
 | Lake       | Parquet on S3 (SeaweedFS locally), DuckDB |
 | ETL        | Python, pandas, DuckDB SQL, SQLAlchemy |
+| Transform  | dbt (dbt-postgres): staging, intermediate and mart models, data tests, docs |
+| Orchestration | Dagster (dagster-dbt): software-defined assets, partitions, schedules |
 | API        | FastAPI, Pydantic                     |
 | Dashboard  | Streamlit, Plotly                     |
 | Runtime    | Docker Compose                        |
@@ -56,6 +63,9 @@ src/oversee/
   migrations/        Alembic environment and numbered SQL revisions
   api/               FastAPI app, routers, response schemas
   etl/               extract, lake, transform (pandas), clean_sql (DuckDB), load, aggregate, CLI
+  dbt_runner.py      `oversee-dbt`: runs dbt with the .env database settings
+  orchestration/     Dagster assets, jobs and schedule
+transform/           dbt project: sources, staging, intermediate and mart models, tests
 dashboard/           Streamlit dashboard (talks only to the API)
   app.py             navigation and sidebar; run this file
   common.py          API access and page helpers
@@ -77,7 +87,8 @@ docs/                architecture notes
 - **Python 3.11+**, **Docker** (Docker Desktop on Windows, running), and **GNU Make**
   (Windows: `scoop install make` or `winget install ezwinports.make`; or use the commands
   under "Without Make" below)
-- **Free ports:** 5432 (PostgreSQL), 8333 and 8888 (lake), 8000 (API), 8501 (dashboard)
+- **Free ports:** 5432 (PostgreSQL), 8333 and 8888 (lake), 8000 (API), 8501 (dashboard),
+  and for the optional tools 3000 (Dagster) and 8080 (dbt docs)
 - **Disk:** about 1.5 GB for the default 4-day window (see "Load data")
 
 ### 1. First-time setup
@@ -126,6 +137,18 @@ make stream MINUTES=10                     # live positions; needs AISSTREAM_API
 - API docs: http://localhost:8000/docs, where you can try every endpoint
 - Health check: http://localhost:8000/health returns `{"status": "ok", ...}`
 - Lake files: http://localhost:8888/buckets/oversee-lake/ais/
+
+### 5. Explore the pipeline (dbt and Dagster)
+
+```bash
+make dagster      # http://localhost:3000: the asset graph from raw download to marts
+make dbt-docs     # http://localhost:8080: dbt models, columns, tests and lineage
+make dbt-build    # rebuild the dbt models and run their data tests from the terminal
+```
+
+In the Dagster UI, **Assets → View global asset lineage** shows the whole pipeline.
+Select `ais_lake_day`, `vessel_positions` and `vessels`, then **Materialize** a few day
+partitions to backfill them. The `refresh_analytics` job rebuilds every dbt model.
 
 ### Day to day
 
@@ -182,13 +205,17 @@ The same commands are also invoke tasks (`invoke --list`).
 | `make stack` | Everything in Docker |
 | `make etl` | End to end: ports, AIS days through the lake, aggregates |
 | `make lake-ingest` / `make lake-load` | Download days into the lake / load them from the lake for a region |
-| `make aggregate` | Rebuild port calls, routes and summaries |
+| `make aggregate` | Rebuild port calls, routes and summaries with dbt, logged in `source_runs` |
 | `make stream` | Collect live AIS for `MINUTES` |
+| `make dbt-build` / `make dbt-test` | dbt models and tests / tests only (`DBT_ARGS` passes extra arguments) |
+| `make dbt-docs` | Generate and serve dbt docs on http://localhost:8080 |
+| `make dagster` | Dagster UI on http://localhost:3000, run history in `.dagster/` |
 | `make test` / `make test-unit` | All tests / unit tests only (no containers) |
 | `make lint` / `make fmt` | Check as CI does / fix and format |
 
 Variables: `REGION` (default `socal`), `START` and `END` (default `2025-03-03`..`2025-03-06`),
-`MINUTES` (default `5`), e.g. `make lake-load START=2025-03-05 END=2025-03-05`.
+`MINUTES` (default `5`), `DBT_ARGS` (e.g. `"--select marts"`), for example
+`make lake-load START=2025-03-05 END=2025-03-05`.
 
 ## Configuration
 
@@ -211,8 +238,8 @@ Two feeds write to the same tables:
 - **Batch** (`oversee-etl run`): MarineCadastre daily files for a date window. Each day is
   downloaded and converted by DuckDB to Parquet in the raw lake, unless it is already
   there. It is then read back filtered to the region, cleaned and loaded with `COPY`.
-  Finally port calls and summaries are rebuilt. A file that was already loaded (same
-  SHA-256) is skipped, so re-running a window is safe.
+  Finally dbt rebuilds port calls and summaries and runs its data tests. A file that was
+  already loaded (same SHA-256) is skipped, so re-running a window is safe.
 - **Live** (`oversee-etl stream`): an AISStream WebSocket collector that validates and
   writes buffered messages every 60 s, reconnects with backoff and flushes on Ctrl+C.
 
@@ -221,6 +248,40 @@ Individual steps are also available: `oversee-etl ports`, `download-ais`, `lake-
 `aggregate` (`oversee-etl <step> --help`). Every run is recorded in `source_runs`, and
 rows dropped by each cleaning rule in `data_quality_log`. Sources, licences and rules are
 documented in [data/README.md](data/README.md).
+
+### Transformation with dbt
+
+The dbt project in [transform/](transform/) builds everything the API serves from the
+three loaded tables:
+
+- **staging** views, one per source: `stg_ports`, `stg_vessels`, `stg_positions`
+- **intermediate**: `int_in_port_reports`, reports at low speed near a port (PostGIS
+  nearest port)
+- **marts** in the `analytics` schema: `fct_port_calls` (gaps-and-islands over in-port
+  reports), `fct_voyages`, `agg_port_activity_daily`, `agg_route_summary`, `dim_ports`,
+  `dim_vessels`
+
+The 39 data tests cover keys, relationships, accepted values, non-overlapping calls and
+the minimum dwell. Port-call thresholds are dbt variables:
+
+```bash
+oversee-dbt build --vars '{port_call_radius_m: 3000, port_call_min_dwell_minutes: 30}'
+```
+
+This replaced an earlier Python aggregation step. On the loaded data, the dbt marts
+matched its output row for row.
+
+### Orchestration with Dagster
+
+[src/oversee/orchestration/](src/oversee/orchestration/) defines the pipeline as assets:
+`ports`, `ais_lake_day` (daily partitions), `vessel_positions` and `vessels`, then every dbt
+model through `dagster-dbt`. Every dbt test is an asset check, and a cleaning-quality check
+warns when more than 1% of in-region rows are dropped. Ingest runs record the lake URI, row
+counts and drops per rule as metadata. An hourly `refresh_analytics` schedule is included,
+stopped by default, for when the live collector runs. The CLI and Make targets call the
+same functions, so Dagster is optional.
+
+### Cleaning rules in pandas and SQL
 
 The cleaning rules exist twice: in pandas (`transform.py`, used by the pipeline) and in
 DuckDB SQL (`clean_sql.py`). Tests require both to give the same rows and drop counts. The
@@ -306,7 +367,10 @@ create throwaway databases, build them through the migrations and drop them afte
 development data is untouched. Without a reachable server they are skipped locally; CI sets
 `OVERSEE_REQUIRE_DB=1` so they fail instead. `tests/integration/test_lake_s3.py` runs against
 the `lake` service when it is up and is skipped otherwise; CI does not run it. It writes
-under a unique `test-*` prefix in the bucket. Lake unit tests and the pandas vs SQL parity
+under a unique `test-*` prefix in the bucket. `tests/integration/test_aggregate.py` runs
+real `dbt build`s on small scenarios, including a failing data test that must stop the
+build. `tests/test_orchestration.py` checks the Dagster asset graph from download to marts.
+Lake unit tests and the pandas vs SQL parity
 tests (`tests/test_clean_sql.py`) use a local folder and need no containers.
 `tests/test_dashboard.py` renders every dashboard page against a fake API (with data, with
 none, and with the API down). `tests/integration/test_api_kpis.py` checks the KPI endpoints
@@ -327,6 +391,9 @@ Docker image build on every push to `main` and every pull request.
 - **`pre-commit` fails with `FileNotFoundError` under `...\Packages\PythonSoftwareFoundation...`:**
   the Microsoft Store Python's cache path is too long. Set
   `VIRTUALENV_OVERRIDE_APP_DATA=%USERPROFILE%\.cache\virtualenv` and run it again.
+- **Dagster shows no assets right after `make dagster`:** the code location is still
+  loading, because it parses the dbt project first. Wait about 30 s and reload. Load
+  errors appear under **Deployment**.
 - **`make` not found on Windows:** `scoop install make` or `winget install ezwinports.make`,
   or use the commands under "Without Make".
 
@@ -336,10 +403,13 @@ Oversee is an MVP built under tight resource limits: free and open data only, on
 development laptop, one region and a few days of AIS data. [ROADMAP.md](ROADMAP.md) lists
 the constraints, what is done, and what comes next:
 
+- **Done recently:** dbt models with data tests for every derived table, and Dagster
+  orchestration of the whole pipeline.
 - **Next: real-time data.** An always-on live collector, a live archive in the lake,
-  aggregates refreshed every few minutes, a live API, and a live map page in the dashboard.
-- **Later:** a cleaned lake layer, more regions and longer history, `/movement-summary`,
-  orchestration (Dagster / dbt) and a cloud deployment path.
+  dbt models refreshed every few minutes by the Dagster schedule, a live API, and a live
+  map page in the dashboard.
+- **Later:** a cleaned lake layer, more regions and longer history, `/movement-summary`
+  and a cloud deployment path.
 
 ## Data sources
 

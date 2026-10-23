@@ -11,7 +11,7 @@ constraints, and those constraints set its current scope.
 | **Budget: free and open data only** | History comes from NOAA MarineCadastre daily files, published after the fact. Live data comes from the free AISStream feed, with no uptime guarantee or replay. No paid AIS providers. |
 | **One development laptop** | 16 GB RAM shared with other work, a few GB of free disk. DuckDB is capped at 2 GB of memory and spills to disk beyond that. Postgres and the lake run in local Docker. |
 | **Small data window** | One region (Los Angeles / Long Beach) and a few days of AIS data, about 1.8M positions. Each extra day adds about 180 MB to the lake and 130 MB to PostgreSQL. |
-| **Local infrastructure** | Object storage is a SeaweedFS container standing in for S3, and processes are started by hand with `make`. There is no scheduler, cloud deployment, authentication or monitoring. |
+| **Local infrastructure** | Object storage is a SeaweedFS container standing in for S3. Dagster runs locally (`make dagster`), with no always-on daemon, cloud deployment, authentication or monitoring. |
 | **One developer** | Scope favours a complete, tested slice over breadth. |
 
 The design keeps the way out of each constraint open. The lake code talks S3, so it can
@@ -29,6 +29,12 @@ an idempotent CLI command that a scheduler can call.
 - [x] Cleaning rules in DuckDB SQL, matching the pandas rules row for row on real data
 - [x] Six-page dashboard with explanations on every page, backed by `/kpis/*` endpoints
 - [x] Developer tooling: Makefile, run guide, Docker-only path
+- [x] dbt transformation layer: staging, intermediate and mart models in PostgreSQL, 39 data
+      tests, docs with lineage. It replaced the Python aggregation step with row-for-row
+      identical results.
+- [x] Dagster orchestration: the pipeline as software-defined assets, daily partitions for
+      AIS days, dbt models and tests as assets and checks, a cleaning-quality check, and a
+      (stopped) hourly refresh schedule
 
 ## Next: real-time data
 
@@ -40,7 +46,7 @@ happening now, alongside the history.
 |---|---|---|
 | 1. Always-on collector | A `collector` service in docker-compose runs `oversee-etl stream` permanently and restarts on failure | Live data today stops when the terminal closes |
 | 2. Live archive in the lake | Raw live messages also written as daily Parquet (`ais_live/date=…`) | AISStream cannot replay, so the lake keeps the only copy for reprocessing |
-| 3. Scheduled refresh | Port calls, routes and summaries rebuilt every 10–15 minutes | Aggregates only change when `make etl` runs; a full rebuild takes about 12 s today |
+| 3. Scheduled refresh | Turn on the Dagster `refresh_analytics` schedule, every 10–15 minutes instead of hourly, with the Dagster daemon running | The dbt models only change when something runs `dbt build`; a full build takes about 20 s on the current data |
 | 4. Live API | `/live/vessels` (latest position per vessel in the last N minutes) and `/live/status` (last message time, message rate) | The dashboard needs "now", and a way to tell the feed is healthy |
 | 5. Live dashboard page | Map of vessels in the region now, refreshing every 30 s, with a freshness indicator and the usual explanation block | The visible real-time view |
 | 6. History / live split | A data-window selector on the history pages | Live days currently stretch the daily charts beyond the batch window |
@@ -65,7 +71,9 @@ Kpler/MarineTraffic) is the fix when data quality matters more than cost.
 - Anomaly views: unusual dwell, vessels loitering outside ports, traffic spikes
 
 **Production path**
-- Orchestration with Dagster (assets per day partition) and dbt models for the aggregates
+- Dagster in production: an always-on daemon, alerts on failed runs and asset checks, and
+  sensors that start the region load when a new lake day lands
+- Incremental dbt models (by day) instead of full rebuilds once history grows
 - Cloud deployment: AWS S3 for the lake, a managed Postgres, and Athena or Snowflake to
   query the lake at full scale
 - API authentication, rate limiting, and monitoring and alerting for the collector and
