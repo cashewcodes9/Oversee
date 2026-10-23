@@ -1,0 +1,46 @@
+version: 2
+
+sources:
+  - name: oversee
+    description: >
+      Tables loaded by the Python ETL (`oversee-etl`): cleaned AIS positions for the region,
+      the vessels that reported them, and the World Port Index. Schema owned by Alembic.
+    schema: public
+    tables:
+      - name: ports
+        description: World Port Index ports, one row per port.
+        meta:
+          dagster:
+            asset_key: ["ports"]
+        columns:
+          - name: port_id
+            data_tests: [unique, not_null]
+          - name: geom
+            description: Generated PostGIS geography point with a GiST index.
+
+      - name: vessels
+        description: One row per MMSI with the latest known attributes.
+        meta:
+          dagster:
+            asset_key: ["vessels"]
+        columns:
+          - name: mmsi
+            data_tests: [unique, not_null]
+
+      - name: vessel_positions
+        description: >
+          Cleaned AIS position reports, about one per vessel per minute. Rows dropped by
+          cleaning are counted per rule in data_quality_log.
+        meta:
+          dagster:
+            asset_key: ["vessel_positions"]
+        columns:
+          - name: mmsi
+            data_tests:
+              - not_null
+              - relationships:
+                  arguments:
+                    to: source('oversee', 'vessels')
+                    field: mmsi
+          - name: ts
+            data_tests: [not_null]

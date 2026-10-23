@@ -3,16 +3,9 @@ from sqlalchemy import create_engine, inspect, text
 
 from oversee import migrate
 
-TABLES = {
-    "source_runs",
-    "ports",
-    "vessels",
-    "vessel_positions",
-    "port_calls",
-    "vessel_routes",
-    "port_activity_daily",
-    "route_summary",
-}
+TABLES = {"source_runs", "ports", "vessels", "vessel_positions", "data_quality_log"}
+# Owned by dbt since 0003 (analytics schema), so absent from public at head
+MOVED_TO_DBT = {"port_calls", "vessel_routes", "port_activity_daily", "route_summary"}
 
 
 def table_names(url: str) -> set[str]:
@@ -29,10 +22,14 @@ def test_upgrade_then_downgrade_to_base(database_factory):
 
     migrate.upgrade(url)
     assert TABLES <= table_names(url)
+    assert not MOVED_TO_DBT & table_names(url)
     assert migrate.current_revision(url) is not None
 
+    migrate.downgrade(url, "0002")
+    assert MOVED_TO_DBT <= table_names(url)
+
     migrate.downgrade(url, "base")
-    assert not TABLES & table_names(url)
+    assert not (TABLES | MOVED_TO_DBT) & table_names(url)
     assert migrate.current_revision(url) is None
 
 

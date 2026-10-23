@@ -14,8 +14,28 @@ import pytest
 from sqlalchemy import URL, Connection, Engine, create_engine, make_url, text
 from sqlalchemy.exc import OperationalError
 
-from oversee import migrate
-from oversee.config import get_settings
+from oversee import dbt_runner, migrate
+from oversee.config import Settings, get_settings
+
+
+def settings_for(url: str) -> Settings:
+    """Settings pointing at the database in url (for dbt, which reads POSTGRES_*)."""
+    parsed = make_url(url)
+    return get_settings().model_copy(
+        update={
+            "postgres_host": parsed.host,
+            "postgres_port": parsed.port,
+            "postgres_user": parsed.username,
+            "postgres_password": parsed.password,
+            "postgres_db": parsed.database,
+        }
+    )
+
+
+def build_analytics(url: str) -> None:
+    """Create the dbt models (analytics schema) in a migrated database."""
+    result = dbt_runner.invoke(["run", "--quiet"], settings=settings_for(url))
+    assert result.success, "dbt run failed; see output above"
 
 
 @pytest.fixture(scope="session")
@@ -48,9 +68,10 @@ def database_factory() -> Iterator[Callable[[], str]]:
 
 @pytest.fixture(scope="session")
 def engine(database_factory) -> Iterator[Engine]:
-    """A database migrated to the latest revision, shared by the session."""
+    """A database migrated to the latest revision with empty dbt models, shared by the session."""
     url = database_factory()
     migrate.upgrade(url)
+    build_analytics(url)
     test_engine = create_engine(url)
     yield test_engine
     test_engine.dispose()

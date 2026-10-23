@@ -35,7 +35,7 @@ def vessel_routes(mmsi: int, session: Session = Depends(get_session)):
         text(
             """
             SELECT origin_port_id, destination_port_id, departure_ts, arrival_ts
-            FROM vessel_routes
+            FROM analytics.fct_voyages
             WHERE mmsi = :mmsi
             ORDER BY departure_ts
             """

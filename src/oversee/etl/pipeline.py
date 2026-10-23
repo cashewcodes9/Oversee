@@ -145,9 +145,9 @@ def ports_loaded() -> int:
 
 
 def rebuild_aggregates(params: aggregate.AggregateParams = aggregate.DEFAULT_PARAMS) -> dict:
-    with load.source_run("aggregate") as run:
-        with get_engine().begin() as conn:
-            counts = aggregate.run(conn, params)
+    """Rebuild the derived tables with `dbt build`, recorded as one source_runs row."""
+    with load.source_run("dbt") as run:
+        counts = aggregate.run(params)
         run["rows_loaded"] = counts["port_calls"]
         logger.info("derived tables rebuilt", extra=counts)
     return counts

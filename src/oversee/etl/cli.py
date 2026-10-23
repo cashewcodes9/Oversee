@@ -151,7 +151,7 @@ def main() -> None:
     p.set_defaults(func=cmd_lake_load)
 
     defaults = aggregate.DEFAULT_PARAMS
-    p = sub.add_parser("aggregate", help="Build port calls and summary tables")
+    p = sub.add_parser("aggregate", help="Build port calls and summary tables with dbt (+ tests)")
     p.add_argument(
         "--radius-km",
         type=float,

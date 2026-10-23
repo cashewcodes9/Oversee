@@ -33,7 +33,7 @@ def overview(session: Session = Depends(get_session)):
                 (SELECT count(*) FROM ports)            AS ports,
                 (SELECT count(*) FROM vessels)          AS vessels,
                 (SELECT count(*) FROM vessel_positions) AS positions,
-                (SELECT count(*) FROM port_calls)       AS port_calls,
+                (SELECT count(*) FROM analytics.fct_port_calls)       AS port_calls,
                 (SELECT min(ts) FROM vessel_positions)  AS first_position_ts,
                 (SELECT max(ts) FROM vessel_positions)  AS last_position_ts
             """
@@ -60,7 +60,7 @@ def daily_traffic(session: Session = Depends(get_session)):
             activity AS (
                 SELECT activity_date AS day, sum(arrivals) AS arrivals,
                        sum(departures) AS departures
-                FROM port_activity_daily
+                FROM analytics.agg_port_activity_daily
                 GROUP BY 1
             )
             SELECT p.day, p.positions, p.active_vessels,
@@ -90,7 +90,7 @@ def port_ranking(
                    count(DISTINCT c.mmsi) AS unique_vessels,
                    avg(extract(epoch FROM c.departure_ts - c.arrival_ts) / 3600)
                        AS avg_dwell_hours
-            FROM port_calls c
+            FROM analytics.fct_port_calls c
             JOIN ports p USING (port_id)
             WHERE (CAST(:start AS DATE) IS NULL OR c.arrival_ts >= CAST(:start AS DATE))
               AND (CAST(:end AS DATE) IS NULL OR c.arrival_ts < CAST(:end AS DATE) + 1)
@@ -140,7 +140,7 @@ def routes(limit: int = Query(20, le=200), session: Session = Depends(get_sessio
                    d.latitude AS destination_latitude, d.longitude AS destination_longitude,
                    sum(r.voyages) AS voyages,
                    sum(r.avg_duration_hours * r.voyages) / sum(r.voyages) AS avg_duration_hours
-            FROM route_summary r
+            FROM analytics.agg_route_summary r
             JOIN ports o ON o.port_id = r.origin_port_id
             JOIN ports d ON d.port_id = r.destination_port_id
             GROUP BY r.origin_port_id, o.port_id, r.destination_port_id, d.port_id
@@ -170,7 +170,7 @@ def peaks(
             SELECT (extract(isodow FROM arrival_ts AT TIME ZONE :tz) - 1)::int AS weekday,
                    extract(hour FROM arrival_ts AT TIME ZONE :tz)::int AS hour,
                    count(*) AS arrivals
-            FROM port_calls
+            FROM analytics.fct_port_calls
             WHERE (CAST(:port_id AS INTEGER) IS NULL OR port_id = :port_id)
             GROUP BY 1, 2
             ORDER BY 1, 2
@@ -190,7 +190,7 @@ def dwell(port_id: int | None = None, session: Session = Depends(get_session)):
             WITH calls AS (
                 SELECT v.vessel_group,
                        extract(epoch FROM c.departure_ts - c.arrival_ts) / 3600 AS hours
-                FROM port_calls c
+                FROM analytics.fct_port_calls c
                 JOIN vessels v USING (mmsi)
                 WHERE c.departure_ts IS NOT NULL
                   AND (CAST(:port_id AS INTEGER) IS NULL OR c.port_id = :port_id)

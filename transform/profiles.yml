@@ -1,0 +1,14 @@
+# Connection settings come from the same POSTGRES_* variables as the rest of Oversee.
+# `oversee-dbt` (and Dagster) fill them from .env, so plain `dbt` needs them exported.
+oversee:
+  target: dev
+  outputs:
+    dev:
+      type: postgres
+      host: "{{ env_var('POSTGRES_HOST', 'localhost') }}"
+      port: "{{ env_var('POSTGRES_PORT', '5432') | as_number }}"
+      user: "{{ env_var('POSTGRES_USER', 'oversee') }}"
+      password: "{{ env_var('POSTGRES_PASSWORD', 'oversee') }}"
+      dbname: "{{ env_var('POSTGRES_DB', 'oversee') }}"
+      schema: analytics
+      threads: 4

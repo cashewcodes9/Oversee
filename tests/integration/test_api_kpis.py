@@ -1,4 +1,8 @@
-"""KPI endpoints against a small, known dataset in a rolled-back transaction."""
+"""KPI endpoints against a small, known dataset in a rolled-back transaction.
+
+Derived rows are inserted straight into the dbt model tables, so these tests check the
+API queries alone; tests/integration/test_aggregate.py checks how dbt builds them.
+"""
 
 import pytest
 from fastapi.testclient import TestClient
@@ -54,19 +58,20 @@ def ports(conn: Connection) -> dict[str, int]:
             (:tug, '2025-03-04 12:00Z', 33.2, -118.0, 12)
         """,
         """
-        INSERT INTO port_calls (mmsi, port_id, arrival_ts, departure_ts) VALUES
-            (:cargo, :lb, '2025-03-03 10:00Z', '2025-03-03 20:00Z'),
-            (:tug, :lb, '2025-03-03 18:00Z', '2025-03-04 00:00Z'),
-            (:tug, :sd, '2025-03-04 12:00Z', NULL)
+        INSERT INTO analytics.fct_port_calls
+            (port_call_id, mmsi, port_id, arrival_ts, departure_ts, dwell_hours) VALUES
+            (1, :cargo, :lb, '2025-03-03 10:00Z', '2025-03-03 20:00Z', 10),
+            (2, :tug, :lb, '2025-03-03 18:00Z', '2025-03-04 00:00Z', 6),
+            (3, :tug, :sd, '2025-03-04 12:00Z', NULL, NULL)
         """,
         """
-        INSERT INTO port_activity_daily
+        INSERT INTO analytics.agg_port_activity_daily
             (port_id, activity_date, arrivals, departures, unique_vessels) VALUES
             (:lb, '2025-03-03', 2, 1, 2), (:lb, '2025-03-04', 0, 1, 1),
             (:sd, '2025-03-04', 1, 0, 1)
         """,
         """
-        INSERT INTO route_summary
+        INSERT INTO analytics.agg_route_summary
             (origin_port_id, destination_port_id, summary_date, voyages, avg_duration_hours)
         VALUES (:lb, :sd, '2025-03-04', 1, 12), (:lb, :sd, '2025-03-05', 3, 8),
                (:sd, :lb, '2025-03-04', 1, 10)

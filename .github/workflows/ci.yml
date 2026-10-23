@@ -52,8 +52,8 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      # dashboard extras so tests/test_dashboard.py renders the pages instead of skipping
-      - run: pip install -e ".[dashboard,dev]"
+      # dashboard and orchestration extras so the dashboard and Dagster tests run, not skip
+      - run: pip install -e ".[dashboard,orchestration,dev]"
       - name: Unit tests
         run: pytest tests --ignore=tests/integration -q
       - name: Integration tests
@@ -68,4 +68,4 @@ jobs:
       - name: Build image
         run: docker build -t oversee:ci .
       - name: Image contains migrations and CLIs
-        run: docker run --rm oversee:ci sh -c "oversee-db history && oversee-etl --help"
+        run: docker run --rm oversee:ci sh -c "oversee-db history && oversee-etl --help && oversee-dbt parse"

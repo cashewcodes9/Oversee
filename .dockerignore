@@ -1,0 +1,7 @@
+# Local build output and caches; the image rebuilds what it needs
+**/__pycache__
+transform/target
+transform/logs
+.dagster
+.venv
+data

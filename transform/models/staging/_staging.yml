@@ -1,0 +1,31 @@
+version: 2
+
+models:
+  - name: stg_ports
+    description: Ports with their location; the PostGIS point drives port-call detection.
+    columns:
+      - name: port_id
+        data_tests: [unique, not_null]
+
+  - name: stg_vessels
+    description: Vessels with the AIS ship type and its reporting group.
+    columns:
+      - name: mmsi
+        description: 9-digit Maritime Mobile Service Identity, used as the vessel id.
+        data_tests: [unique, not_null]
+      - name: vessel_group
+        description: AIS ship type grouped for reporting (vessel_type_groups).
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [cargo, tanker, passenger, tug, fishing, pleasure, service,
+                         high_speed, other, unknown]
+
+  - name: stg_positions
+    description: AIS position reports (UTC), speed over ground in knots.
+    columns:
+      - name: mmsi
+        data_tests: [not_null]
+      - name: ts
+        data_tests: [not_null]

@@ -10,6 +10,12 @@ data/tmp/
 !data/processed/.gitkeep
 *.part
 
+# dbt build output and logs; Dagster run history (DAGSTER_HOME, see Makefile)
+transform/target/
+transform/logs/
+transform/dbt_packages/
+.dagster/
+
 # Streamlit agent skills: machine-specific symlinks that `streamlit run` may create
 .agents/skills/developing-with-streamlit
 .claude/skills/developing-with-streamlit

@@ -13,7 +13,7 @@ router = APIRouter(prefix="/ports", tags=["ports"])
 @router.get("", response_model=list[Port])
 def list_ports(
     country_code: str | None = None,
-    active: bool = Query(False, description="Only ports with rows in port_activity_daily"),
+    active: bool = Query(False, description="Only ports with port activity"),
     limit: int = Query(100, le=1000),
     session: Session = Depends(get_session),
 ):
@@ -24,7 +24,7 @@ def list_ports(
             FROM ports p
             WHERE (CAST(:country_code AS TEXT) IS NULL OR country_code = :country_code)
               AND (NOT :active OR EXISTS (
-                  SELECT 1 FROM port_activity_daily a WHERE a.port_id = p.port_id
+                  SELECT 1 FROM analytics.agg_port_activity_daily a WHERE a.port_id = p.port_id
               ))
             ORDER BY name
             LIMIT :limit
@@ -52,7 +52,7 @@ def port_activity(
         text(
             """
             SELECT activity_date, arrivals, departures, unique_vessels, avg_dwell_hours
-            FROM port_activity_daily
+            FROM analytics.agg_port_activity_daily
             WHERE port_id = :port_id
               AND (CAST(:start AS DATE) IS NULL OR activity_date >= :start)
               AND (CAST(:end AS DATE) IS NULL OR activity_date <= :end)

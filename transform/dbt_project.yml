@@ -1,0 +1,30 @@
+name: oversee
+version: "1.0.0"
+config-version: 2
+profile: oversee
+
+model-paths: ["models"]
+macro-paths: ["macros"]
+test-paths: ["tests"]
+target-path: target
+clean-targets: [target, logs]
+
+# Port-call detection thresholds; override per run, e.g.
+#   oversee-dbt build --vars '{port_call_radius_m: 3000}'
+vars:
+  port_call_radius_m: 5000          # max distance from a port to count as in port
+  port_call_max_sog_knots: 1.0      # max speed over ground to count as stationary
+  port_call_max_gap_hours: 6        # a longer reporting gap splits one stay into two calls
+  port_call_min_dwell_minutes: 60   # shorter stays are not port calls
+
+models:
+  oversee:
+    staging:
+      +schema: staging
+      +materialized: view
+    intermediate:
+      +schema: intermediate
+      +materialized: view
+    marts:
+      +schema: analytics
+      +materialized: table

@@ -1,0 +1,89 @@
+version: 2
+
+models:
+  - name: fct_port_calls
+    description: >
+      One row per stay of a vessel at a port, detected from slow AIS reports near the port.
+      Thresholds are the port_call_* vars in dbt_project.yml.
+    columns:
+      - name: port_call_id
+        data_tests: [unique, not_null]
+      - name: mmsi
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_vessels')
+                field: mmsi
+      - name: port_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_ports')
+                field: port_id
+      - name: arrival_ts
+        description: First in-port report of the stay (UTC).
+        data_tests: [not_null]
+      - name: departure_ts
+        description: Last in-port report (UTC); null while the call is still open.
+      - name: dwell_hours
+        description: Hours from arrival to departure; null for open calls.
+
+  - name: fct_voyages
+    description: A vessel's trip from one completed port call to its next call at another port.
+    columns:
+      - name: voyage_id
+        data_tests: [unique, not_null]
+      - name: origin_port_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_ports')
+                field: port_id
+      - name: destination_port_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_ports')
+                field: port_id
+      - name: duration_hours
+        description: Hours from leaving the origin to arriving at the destination.
+
+  - name: agg_port_activity_daily
+    description: Arrivals, departures, vessels present and average stay per port and UTC day.
+    columns:
+      - name: port_id
+        data_tests: [not_null]
+      - name: activity_date
+        data_tests: [not_null]
+      - name: arrivals
+        description: Port calls starting that day.
+      - name: departures
+        description: Port calls ending that day.
+      - name: unique_vessels
+        description: Vessels in port at some point that day.
+      - name: avg_dwell_hours
+        description: Average stay of calls arriving that day (completed calls only).
+
+  - name: agg_route_summary
+    description: Voyages per origin, destination and UTC departure day.
+    columns:
+      - name: voyages
+        data_tests: [not_null]
+      - name: avg_duration_hours
+        description: Average trip time in hours.
+
+  - name: dim_ports
+    description: Every catalogue port with its activity totals; has_activity marks ports with calls.
+    columns:
+      - name: port_id
+        data_tests: [unique, not_null]
+
+  - name: dim_vessels
+    description: Every vessel with its reporting window, report count and port calls.
+    columns:
+      - name: mmsi
+        data_tests: [unique, not_null]

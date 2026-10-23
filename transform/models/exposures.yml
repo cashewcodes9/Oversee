@@ -1,0 +1,30 @@
+version: 2
+
+exposures:
+  - name: kpi_api
+    label: Oversee KPI API
+    type: application
+    maturity: medium
+    url: http://localhost:8000/docs
+    description: FastAPI service; the /kpis/*, /ports and /vessels endpoints read these models.
+    depends_on:
+      - ref('fct_port_calls')
+      - ref('fct_voyages')
+      - ref('agg_port_activity_daily')
+      - ref('agg_route_summary')
+    owner:
+      name: Oversee
+
+  - name: port_activity_dashboard
+    label: Port activity dashboard
+    type: dashboard
+    maturity: medium
+    url: http://localhost:8501
+    description: Six-page Streamlit dashboard, reading these models through the KPI API.
+    depends_on:
+      - ref('fct_port_calls')
+      - ref('fct_voyages')
+      - ref('agg_port_activity_daily')
+      - ref('agg_route_summary')
+    owner:
+      name: Oversee
