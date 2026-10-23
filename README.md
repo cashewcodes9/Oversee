@@ -64,6 +64,7 @@ pip install -e ".[dashboard,dev]"
 oversee-etl ports data/raw/UpdatedPub150.csv          # World Port Index export from NGA
 oversee-etl download-ais 2024-01-01 2024-01-07
 oversee-etl ais data/raw/AIS_2024_01_01.zip --region socal
+oversee-etl aggregate                                 # port calls, routes, daily summaries
 
 # 5. Run the API and dashboard
 uvicorn oversee.api.main:app --reload                 # http://localhost:8000/docs
@@ -90,10 +91,14 @@ pytest
 ruff check .
 ```
 
+Integration tests in `tests/integration/` need the database (`docker compose up -d db`). They
+create and drop a throwaway database, so development data is untouched. Without a reachable
+server they are skipped.
+
 ## Roadmap
 
 - [x] Project scaffolding, schema, ETL for ports and AIS positions
-- [ ] Port call detection and `port_activity_daily` / `route_summary` aggregation
+- [x] Port call detection and `port_activity_daily` / `route_summary` aggregation
 - [ ] `/movement-summary` endpoint with region and date filters
 - [ ] Dashboard: busiest ports, route summary, hourly peak heatmap
 - [ ] Optional: orchestration with Dagster or dbt models

@@ -13,8 +13,26 @@
    - split rows into a vessel dimension and a position fact table
 3. **Load** (`etl/load.py`): stage each frame into a temporary table and upsert it into the
    target table. Re-running the same file is idempotent.
-4. **Aggregate** (TODO): detect port calls from positions near a port at low speed, derive
-   voyages, and rebuild the daily summary tables.
+4. **Aggregate** (`etl/aggregate.py`): a full refresh of all derived tables in one
+   transaction, with SQL doing the work.
+   - **Port calls:** positions at ≤ 1 kn within 5 km of a port count as in port. When several
+     ports are in range, the nearest one wins. Consecutive in-port reports at the same port
+     form one call (gaps-and-islands with window functions). A reporting gap over 6 h splits
+     a call, and calls shorter than 60 min are dropped. A call still in progress at the end of
+     the data keeps `departure_ts` NULL.
+   - **Voyages:** consecutive calls of one vessel at different ports.
+   - **Daily activity:** for each port and UTC day, the arrivals, departures and distinct
+     vessels present, plus the average dwell of calls arriving that day.
+   - **Route summary:** voyages per origin, destination and departure day, with average
+     duration.
+
+   Every threshold can be tuned with `oversee-etl aggregate --help`.
+
+   Known limitations:
+   - Arrivals are only as precise as the AIS reporting interval.
+   - Calls already under way when the data window starts show the first observed time as
+     their arrival.
+   - Anchorages within the radius count as port time.
 
 Every load is recorded in `source_runs` with its status, row counts and any error.
 
