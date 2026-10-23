@@ -11,7 +11,8 @@ import argparse
 from datetime import date, timedelta
 from pathlib import Path
 
-from oversee.etl import extract, load, transform
+from oversee.db import get_engine
+from oversee.etl import aggregate, extract, load, transform
 from oversee.etl.regions import REGIONS
 
 
@@ -44,9 +45,18 @@ def cmd_ais(args: argparse.Namespace) -> None:
 
 
 def cmd_aggregate(args: argparse.Namespace) -> None:
-    # TODO: detect port calls (positions within a port radius at low speed),
-    # derive vessel_routes, then rebuild port_activity_daily and route_summary.
-    raise NotImplementedError("Aggregation step not implemented yet")
+    params = aggregate.AggregateParams(
+        radius_m=args.radius_km * 1000,
+        max_sog_knots=args.max_sog,
+        max_gap_hours=args.max_gap_hours,
+        min_dwell_minutes=args.min_dwell_minutes,
+    )
+    with load.source_run("aggregate") as run:
+        with get_engine().begin() as conn:
+            counts = aggregate.run(conn, params)
+        run["rows_loaded"] = counts["port_calls"]
+    for table, n in counts.items():
+        print(f"{table}: {n} rows")
 
 
 def main() -> None:
@@ -67,7 +77,16 @@ def main() -> None:
     p.add_argument("--region", choices=sorted(REGIONS), help="Keep only positions in region")
     p.set_defaults(func=cmd_ais)
 
+    defaults = aggregate.DEFAULT_PARAMS
     p = sub.add_parser("aggregate", help="Build port calls and summary tables")
+    p.add_argument("--radius-km", type=float, default=defaults.radius_m / 1000,
+                   help="Max distance from a port to count as in port")
+    p.add_argument("--max-sog", type=float, default=defaults.max_sog_knots,
+                   help="Max speed over ground (knots) to count as stationary")
+    p.add_argument("--max-gap-hours", type=float, default=defaults.max_gap_hours,
+                   help="Reporting gap that splits one stay into two port calls")
+    p.add_argument("--min-dwell-minutes", type=float, default=defaults.min_dwell_minutes,
+                   help="Discard stays shorter than this")
     p.set_defaults(func=cmd_aggregate)
 
     args = parser.parse_args()
