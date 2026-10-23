@@ -16,18 +16,21 @@ exposes the data as operational KPIs, and a dashboard visualises them.
 ## Architecture
 
 ```
-MarineCadastre AIS ─┐
-                    ├─► ETL (extract → transform → load) ─► PostgreSQL/PostGIS ─► FastAPI ─► Dashboard
-World Port Index ───┘        src/oversee/etl                  migrations          src/oversee/api   dashboard/
+MarineCadastre AIS ─► raw lake (Parquet on S3) ─┐
+                      DuckDB, SeaweedFS locally  ├─► ETL (transform → load) ─► PostgreSQL/PostGIS ─► FastAPI ─► Dashboard
+World Port Index ───────────────────────────────┘     src/oversee/etl           migrations          src/oversee/api   dashboard/
 ```
 
-See [docs/architecture.md](docs/architecture.md) for the data model and pipeline details.
+Each AIS day is kept unfiltered as Parquet in an S3-compatible lake, and only the region
+being analysed is cleaned into PostgreSQL. See [docs/architecture.md](docs/architecture.md)
+for the layers, data model and pipeline details.
 
 ## Stack
 
 | Layer      | Tech                                  |
 |------------|---------------------------------------|
 | Data       | PostgreSQL 16 + PostGIS, Alembic      |
+| Lake       | Parquet on S3 (SeaweedFS locally), DuckDB |
 | ETL        | Python, pandas, SQLAlchemy            |
 | API        | FastAPI, Pydantic                     |
 | Dashboard  | Streamlit, Plotly                     |
@@ -44,11 +47,13 @@ src/oversee/
   migrate.py         `oversee-db` CLI around Alembic
   migrations/        Alembic environment and numbered SQL revisions
   api/               FastAPI app, routers, response schemas
-  etl/               extract, transform, load, aggregate, regions, CLI
+  etl/               extract, lake, transform, load, aggregate, regions, CLI
 dashboard/app.py     Streamlit dashboard (talks only to the API)
-tests/               unit tests; tests/integration/ needs PostgreSQL
+docker/seaweedfs/    S3 credentials for the local lake service
+tests/               unit tests; tests/integration/ needs PostgreSQL (and the lake for S3 tests)
 tasks.py             invoke tasks (`invoke --list`)
 data/raw/            downloaded source files (git-ignored)
+data/lake/           local lake when LAKE_ROOT=data/lake (git-ignored)
 docs/                architecture notes
 ```
 
@@ -64,8 +69,8 @@ python -m venv .venv
 pip install -e ".[dashboard,dev]"
 pre-commit install              # ruff + file checks on every commit
 
-# 3. Start the database and apply migrations
-docker compose up -d --wait db
+# 3. Start the database and the S3 lake, then apply migrations
+docker compose up -d --wait db lake
 oversee-db upgrade
 
 # 4. Load data: ports, 14 days of AIS for LA / Long Beach, then aggregates
@@ -82,7 +87,12 @@ streamlit run dashboard/app.py                        # http://localhost:8501
 Or run everything in containers with `docker compose up --build`: a one-shot `migrate` service
 applies migrations before the API starts.
 
-Common commands are also available as invoke tasks: `invoke db`, `invoke migrate`,
+With GNU Make installed (Windows: `scoop install make`), `make dev` does steps 3 and 5 in
+one go: it starts the containers, applies migrations, then runs the API and dashboard
+together. `make etl START=2025-03-03 END=2025-03-16` loads data. `make help` lists all
+targets.
+
+Common commands are also available as invoke tasks: `invoke db`, `invoke lake`, `invoke migrate`,
 `invoke test --unit`, `invoke lint`, `invoke fmt`, `invoke serve`, `invoke dashboard`,
 `invoke stack`.
 
@@ -90,14 +100,16 @@ Common commands are also available as invoke tasks: `invoke db`, `invoke migrate
 
 Two feeds write to the same tables:
 
-- **Batch** (`oversee-etl run`): MarineCadastre daily files for a date window. Each file is
-  downloaded, read in 500k-row chunks, filtered to the region, cleaned and loaded with
-  `COPY`; then port calls and summaries are rebuilt. A file that was already loaded
-  (same SHA-256) is skipped, so re-running a window is safe.
+- **Batch** (`oversee-etl run`): MarineCadastre daily files for a date window. Each day is
+  downloaded and converted by DuckDB to Parquet in the raw lake, unless it is already
+  there. It is then read back filtered to the region, cleaned and loaded with `COPY`.
+  Finally port calls and summaries are rebuilt. A file that was already loaded (same
+  SHA-256) is skipped, so re-running a window is safe.
 - **Live** (`oversee-etl stream`): an AISStream WebSocket collector that validates and
   writes buffered messages every 60 s, reconnects with backoff and flushes on Ctrl+C.
 
-Individual steps are also available: `oversee-etl ports`, `download-ais`, `ais`,
+Individual steps are also available: `oversee-etl ports`, `download-ais`, `lake-ingest`,
+`lake-load`, `ais` (a raw file straight into PostgreSQL, bypassing the lake), and
 `aggregate` (`oversee-etl <step> --help`). Every run is recorded in `source_runs`, and
 rows dropped by each cleaning rule in `data_quality_log`. Sources, licences and rules are
 documented in [data/README.md](data/README.md).
@@ -144,7 +156,9 @@ ruff check . && ruff format --check .
 Integration tests in `tests/integration/` need the database (`docker compose up -d db`). They
 create throwaway databases, build them through the migrations and drop them afterwards, so
 development data is untouched. Without a reachable server they are skipped locally; CI sets
-`OVERSEE_REQUIRE_DB=1` so they fail instead.
+`OVERSEE_REQUIRE_DB=1` so they fail instead. `tests/integration/test_lake_s3.py` runs against
+the `lake` service when it is up (`docker compose up -d --wait lake`) and is skipped
+otherwise. It writes under a unique `test-*` prefix in the bucket.
 
 CI (GitHub Actions) runs lint, unit tests, integration tests against a PostGIS service and a
 Docker image build on every push to `main` and every pull request.
@@ -160,6 +174,7 @@ and run it again.
 - [x] Port call detection and `port_activity_daily` / `route_summary` aggregation
 - [x] Engineering foundations: migrations, CI, pre-commit, structured logging
 - [x] Real data: 2025 MarineCadastre batch window + live AISStream collector, data quality log
+- [x] Raw data lake: daily Parquet on S3-compatible storage, written and filtered with DuckDB
 - [ ] `/movement-summary` endpoint with region and date filters
 - [ ] Dashboard: busiest ports, route summary, hourly peak heatmap
 - [ ] Optional: orchestration with Dagster or dbt models
