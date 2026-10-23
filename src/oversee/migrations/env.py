@@ -1,4 +1,7 @@
-"""Alembic environment. Revisions are hand-written SQL; there is no ORM metadata to autogenerate from."""
+"""Alembic environment.
+
+Revisions are hand-written SQL; there is no ORM metadata to autogenerate from.
+"""
 
 from alembic import context
 from sqlalchemy import create_engine, pool

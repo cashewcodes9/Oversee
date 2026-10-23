@@ -23,8 +23,12 @@ def ports(conn: Connection) -> dict[str, int]:
             RETURNING name, port_id
             """
         ),
-        {"lb_lat": LONG_BEACH[0], "lb_lon": LONG_BEACH[1],
-         "sd_lat": SAN_DIEGO[0], "sd_lon": SAN_DIEGO[1]},
+        {
+            "lb_lat": LONG_BEACH[0],
+            "lb_lon": LONG_BEACH[1],
+            "sd_lat": SAN_DIEGO[0],
+            "sd_lon": SAN_DIEGO[1],
+        },
     ).all()
     return dict(rows)
 
@@ -58,22 +62,32 @@ def calls(conn: Connection):
 
 
 def test_voyage_between_two_ports(conn, ports):
-    add_track(conn, 111111111, [
-        (0, AT_SEA, 12.0),
-        *stay(2, 10, LONG_BEACH),     # 02:00–12:00 at Long Beach
-        (14, AT_SEA, 14.0),
-        *stay(20, 5, SAN_DIEGO),      # 20:00–01:00 at San Diego
-        (27, AT_SEA, 13.0),
-    ])
+    add_track(
+        conn,
+        111111111,
+        [
+            (0, AT_SEA, 12.0),
+            *stay(2, 10, LONG_BEACH),  # 02:00–12:00 at Long Beach
+            (14, AT_SEA, 14.0),
+            *stay(20, 5, SAN_DIEGO),  # 20:00–01:00 at San Diego
+            (27, AT_SEA, 13.0),
+        ],
+    )
 
     counts = aggregate.run(conn)
 
     assert counts["port_calls"] == 2
     lb, sd = calls(conn)
     assert (lb.port_id, lb.arrival_ts, lb.departure_ts) == (
-        ports["Long Beach"], T0 + timedelta(hours=2), T0 + timedelta(hours=12))
+        ports["Long Beach"],
+        T0 + timedelta(hours=2),
+        T0 + timedelta(hours=12),
+    )
     assert (sd.port_id, sd.arrival_ts, sd.departure_ts) == (
-        ports["San Diego"], T0 + timedelta(hours=20), T0 + timedelta(hours=25))
+        ports["San Diego"],
+        T0 + timedelta(hours=20),
+        T0 + timedelta(hours=25),
+    )
 
     route = conn.execute(text("SELECT * FROM vessel_routes")).mappings().one()
     assert route["origin_port_id"] == ports["Long Beach"]
@@ -113,21 +127,31 @@ def test_call_open_at_end_of_data_has_no_departure(conn, ports):
 
 
 def test_short_stops_and_moving_vessels_are_ignored(conn, ports):
-    add_track(conn, 444444444, [
-        (0, LONG_BEACH, 0.2), (0.5, LONG_BEACH, 0.2),   # 30 min stop < 60 min dwell
-        (1, LONG_BEACH, 8.0), (2, LONG_BEACH, 9.0),     # passing through at speed
-        (3, AT_SEA, 12.0),
-    ])
+    add_track(
+        conn,
+        444444444,
+        [
+            (0, LONG_BEACH, 0.2),
+            (0.5, LONG_BEACH, 0.2),  # 30 min stop < 60 min dwell
+            (1, LONG_BEACH, 8.0),
+            (2, LONG_BEACH, 9.0),  # passing through at speed
+            (3, AT_SEA, 12.0),
+        ],
+    )
 
     assert aggregate.run(conn)["port_calls"] == 0
 
 
 def test_reporting_gap_splits_calls(conn, ports):
-    add_track(conn, 555555555, [
-        *stay(0, 3, LONG_BEACH),
-        *stay(13, 3, LONG_BEACH),     # 10 h silence > 6 h max gap
-        (20, AT_SEA, 12.0),
-    ])
+    add_track(
+        conn,
+        555555555,
+        [
+            *stay(0, 3, LONG_BEACH),
+            *stay(13, 3, LONG_BEACH),  # 10 h silence > 6 h max gap
+            (20, AT_SEA, 12.0),
+        ],
+    )
 
     assert aggregate.run(conn)["port_calls"] == 2
     assert aggregate.run(conn, aggregate.AggregateParams(max_gap_hours=12))["port_calls"] == 1

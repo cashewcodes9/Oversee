@@ -3,8 +3,14 @@ from sqlalchemy import create_engine, inspect, text
 from oversee import migrate
 
 TABLES = {
-    "source_runs", "ports", "vessels", "vessel_positions",
-    "port_calls", "vessel_routes", "port_activity_daily", "route_summary",
+    "source_runs",
+    "ports",
+    "vessels",
+    "vessel_positions",
+    "port_calls",
+    "vessel_routes",
+    "port_activity_daily",
+    "route_summary",
 }
 
 

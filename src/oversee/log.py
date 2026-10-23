@@ -21,9 +21,7 @@ _STANDARD_ATTRS = set(vars(logging.LogRecord("", 0, "", 0, "", None, None))) | {
 
 
 def _extras(record: logging.LogRecord) -> dict:
-    return {
-        k: v for k, v in vars(record).items() if k not in _STANDARD_ATTRS and v is not None
-    }
+    return {k: v for k, v in vars(record).items() if k not in _STANDARD_ATTRS and v is not None}
 
 
 class RunContextFilter(logging.Filter):

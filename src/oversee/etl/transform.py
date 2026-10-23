@@ -61,11 +61,7 @@ def clean_ais(df: pd.DataFrame, bbox: BoundingBox | None = None) -> pd.DataFrame
 def split_vessels(positions: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Split cleaned AIS rows into a vessel dimension and a position fact table."""
     vessel_cols = ["mmsi", "imo", "name", "call_sign", "vessel_type", "length_m", "width_m"]
-    vessels = (
-        positions.sort_values("ts")
-        .groupby("mmsi", as_index=False)[vessel_cols[1:]]
-        .last()
-    )
+    vessels = positions.sort_values("ts").groupby("mmsi", as_index=False)[vessel_cols[1:]].last()
     position_cols = ["mmsi", "ts", "latitude", "longitude", "sog", "cog", "heading", "nav_status"]
     return vessels, positions[position_cols]
 

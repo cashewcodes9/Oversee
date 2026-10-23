@@ -63,8 +63,13 @@ def _finish_run(run_id: int, status: str, stats: dict, error: str | None = None)
                 WHERE run_id = :run_id
                 """
             ),
-            {"run_id": run_id, "status": status, "error": error,
-             "rows_read": stats["rows_read"], "rows_loaded": stats["rows_loaded"]},
+            {
+                "run_id": run_id,
+                "status": status,
+                "error": error,
+                "rows_read": stats["rows_read"],
+                "rows_loaded": stats["rows_loaded"],
+            },
         )
 
 

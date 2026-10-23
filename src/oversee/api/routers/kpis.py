@@ -10,9 +10,10 @@ router = APIRouter(prefix="/kpis", tags=["kpis"])
 
 @router.get("/overview", response_model=KpiOverview)
 def overview(session: Session = Depends(get_session)):
-    row = session.execute(
-        text(
-            """
+    row = (
+        session.execute(
+            text(
+                """
             SELECT
                 (SELECT count(*) FROM ports)            AS ports,
                 (SELECT count(*) FROM vessels)          AS vessels,
@@ -21,8 +22,11 @@ def overview(session: Session = Depends(get_session)):
                 (SELECT min(ts) FROM vessel_positions)  AS first_position_ts,
                 (SELECT max(ts) FROM vessel_positions)  AS last_position_ts
             """
+            )
         )
-    ).mappings().one()
+        .mappings()
+        .one()
+    )
     return KpiOverview(**row)
 
 

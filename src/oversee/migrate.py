@@ -57,8 +57,9 @@ def _has_unversioned_schema(url: str | None) -> bool:
 def upgrade(url: str | None = None, revision: str = "head") -> None:
     cfg = alembic_config(url)
     if _has_unversioned_schema(url):
-        logger.info("existing schema has no version table, stamping baseline",
-                    extra={"revision": BASELINE})
+        logger.info(
+            "existing schema has no version table, stamping baseline", extra={"revision": BASELINE}
+        )
         command.stamp(cfg, BASELINE)
     command.upgrade(cfg, revision)
 

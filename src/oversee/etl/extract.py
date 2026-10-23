@@ -10,7 +10,9 @@ RAW_DIR = Path("data/raw")
 
 # MarineCadastre publishes one zipped CSV per day. Verify the URL pattern for
 # the chosen year on https://hub.marinecadastre.gov before relying on it.
-MARINECADASTRE_AIS_URL = "https://coast.noaa.gov/htdata/CMSP/AISDataHandler/{y}/AIS_{y}_{m:02d}_{d:02d}.zip"
+MARINECADASTRE_AIS_URL = (
+    "https://coast.noaa.gov/htdata/CMSP/AISDataHandler/{y}/AIS_{y}_{m:02d}_{d:02d}.zip"
+)
 
 
 def download_ais_day(day: date, raw_dir: Path = RAW_DIR) -> Path:

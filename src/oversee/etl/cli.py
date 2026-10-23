@@ -82,14 +82,30 @@ def main() -> None:
 
     defaults = aggregate.DEFAULT_PARAMS
     p = sub.add_parser("aggregate", help="Build port calls and summary tables")
-    p.add_argument("--radius-km", type=float, default=defaults.radius_m / 1000,
-                   help="Max distance from a port to count as in port")
-    p.add_argument("--max-sog", type=float, default=defaults.max_sog_knots,
-                   help="Max speed over ground (knots) to count as stationary")
-    p.add_argument("--max-gap-hours", type=float, default=defaults.max_gap_hours,
-                   help="Reporting gap that splits one stay into two port calls")
-    p.add_argument("--min-dwell-minutes", type=float, default=defaults.min_dwell_minutes,
-                   help="Discard stays shorter than this")
+    p.add_argument(
+        "--radius-km",
+        type=float,
+        default=defaults.radius_m / 1000,
+        help="Max distance from a port to count as in port",
+    )
+    p.add_argument(
+        "--max-sog",
+        type=float,
+        default=defaults.max_sog_knots,
+        help="Max speed over ground (knots) to count as stationary",
+    )
+    p.add_argument(
+        "--max-gap-hours",
+        type=float,
+        default=defaults.max_gap_hours,
+        help="Reporting gap that splits one stay into two port calls",
+    )
+    p.add_argument(
+        "--min-dwell-minutes",
+        type=float,
+        default=defaults.min_dwell_minutes,
+        help="Discard stays shorter than this",
+    )
     p.set_defaults(func=cmd_aggregate)
 
     args = parser.parse_args()
